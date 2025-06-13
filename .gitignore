@@ -6,3 +6,4 @@
 .quarto
 
 *.duckdb
+testing.R

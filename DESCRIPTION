@@ -12,9 +12,12 @@ Imports:
     DatabaseConnector,
     duckdb,
     glue,
-    PatientLevelPrediction (>= 6.4.1)
+    PatientLevelPrediction (>= 6.4.1),
+    purrr
 Suggests:
     devtools,
+    ResultModelManager (>= 0.5.11),
     usethis
 Remotes:  
+    ohdsi,
     ohdsi

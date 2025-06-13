@@ -39,6 +39,8 @@ extractCohorts <- function(
 ) {
 
   connection <- DatabaseConnector::connect(connectionDetails)
+  connectionDbms <- DatabaseConnector::dbms(connection)
+
   if (connectionDbms == "duckdb") {
 
     sql_query <- glue::glue(
@@ -93,7 +95,6 @@ extractCohorts <- function(
     )
   }
 
-  connectionDbms <- DatabaseConnector::dbms(connection)
 
   if (firstExposureOnly) {
 

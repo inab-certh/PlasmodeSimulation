@@ -72,13 +72,13 @@ createOutcomeModelSettings <- function(
     )
   )
 
-  use_same_flags <- purrr::pmap_lgl(
+  useSameFlags <- purrr::pmap_lgl(
     .l = meta,
     .f = checkIfUsingSameSettings,
     nOutcomeIds = nOutcomeIds
   )
 
-  names(use_same_flags) <- paste0(
+  names(useSameFlags) <- paste0(
     "useSame",
     c(
       "PopulationSettings",
@@ -106,7 +106,7 @@ createOutcomeModelSettings <- function(
       preprocessSettings = preprocessSettings,
       modelSettings = modelSettings
     ),
-    as.list(use_same_flags),
+    as.list(useSameFlags),
     list(saveDirectory = saveDirectory)
   )
 
