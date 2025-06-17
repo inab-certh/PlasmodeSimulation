@@ -22,7 +22,6 @@ checkIfUsingSameSettings <- function(
 }
 
 createOutcomeModelSettings <- function(
-  databaseDetails,
   targetId = 1,
   outcomeIds,
   populationSettings,
@@ -33,6 +32,7 @@ createOutcomeModelSettings <- function(
   splitSettings,
   preprocessSettings,
   modelSettings,
+  executeSettings,
   saveDirectory = "./OutcomeModels"
 ) {
 
@@ -48,7 +48,8 @@ createOutcomeModelSettings <- function(
       sampleSettings,
       splitSettings,
       preprocessSettings,
-      modelSettings
+      modelSettings,
+      executeSettings
     ),
     targetClass = c(
       "populationSettings",
@@ -58,7 +59,8 @@ createOutcomeModelSettings <- function(
       "sampleSettings",
       "splitSettings",
       "preprocessSettings",
-      "modelSettings"
+      "modelSettings",
+      "executeSettings"
     ),
     settingsLabel = c(
       "population settings",
@@ -68,7 +70,8 @@ createOutcomeModelSettings <- function(
       "sample settings",
       "split settings",
       "pre-process settings",
-      "model settings"
+      "model settings",
+      "execute settings"
     )
   )
 
@@ -88,13 +91,13 @@ createOutcomeModelSettings <- function(
       "SampleSettings",
       "SplitSettings",
       "PreprocessSettings",
-      "ModelSettings"
+      "ModelSettings",
+      "ExecuteSettings"
     )
   )
 
   result <- c(
     list(
-      databaseDetails = databaseDetails,
       targetId = targetId,
       outcomeIds = outcomeIds,
       populationSettings = populationSettings,
@@ -104,7 +107,8 @@ createOutcomeModelSettings <- function(
       sampleSettings = sampleSettings,
       splitSettings = splitSettings,
       preprocessSettings = preprocessSettings,
-      modelSettings = modelSettings
+      modelSettings = modelSettings,
+      executeSettings = executeSettings
     ),
     as.list(useSameFlags),
     list(saveDirectory = saveDirectory)

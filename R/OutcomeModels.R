@@ -18,6 +18,10 @@ trainOutcomeModels <- function(
     purrr::set_names(paste0("outcomeId_", outcomeIds))
 
   components <- list(
+    executeSettings = list(
+      flag = outcomeModelSettings$useSameExecuteSettings,
+      value = outcomeModelSettings$executeSettings
+    ),
     modelSettings = list(
       flag = outcomeModelSettings$useSameModelSettings,
       value = outcomeModelSettings$modelSettings
@@ -65,8 +69,6 @@ trainOutcomeModels <- function(
     }
   )
 
-
-  browser()
   PatientLevelPrediction::runMultiplePlp(
     databaseDetails = databaseDetails,
     modelDesignList = modelDesignList,
