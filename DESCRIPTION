@@ -13,10 +13,12 @@ Imports:
     duckdb,
     glue,
     PatientLevelPrediction (>= 6.4.1),
-    purrr
+    polspline,
+    purrr,
+    withr
 Suggests:
     devtools,
     ResultModelManager (>= 0.5.11),
     usethis
-Remotes:  
+Remotes: 
     ohdsi

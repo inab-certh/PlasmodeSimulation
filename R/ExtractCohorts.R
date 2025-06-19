@@ -127,7 +127,7 @@ extractCohorts <- function(
       )
 
     } else if (connectionDbms == "postgresql") {
-      
+
       createCohortTableIndex(
         connection = connection,
         cohortDatabaseSchema = exposureDatabaseSchema,
