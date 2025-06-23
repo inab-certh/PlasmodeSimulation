@@ -80,16 +80,17 @@ trainOutcomeModels <- function(
 }
 
 
-
 generateSample <- function(
-  connection,
+  connectionDetails,
   size,
   exposureDatabaseSchema,
   exposureTable,
   exposureIds,
   resultDatabaseSchema,
-  simulatedCohortTable = "simulation"
+  simulatedCohortTable = "sampled_cohorts"
 ) {
+
+  connection <- DatabaseConnector::connect(connectionDetails)
 
   message("Sampling cohorts...")
   sqlQuery <- glue::glue(
@@ -154,7 +155,7 @@ generateSample <- function(
   DatabaseConnector::insertTable(
     connection = connection,
     databaseSchema = resultDatabaseSchema,
-    tableName = "sampled_cohorts",
+    tableName = simulatedCohortTable,
     data = sampledCohorts,
     tempTable = FALSE,
     dropTableIfExists = TRUE
@@ -162,20 +163,21 @@ generateSample <- function(
 
   message("Sampled cohorts stored in table sampled_cohorts")
 
+  DatabaseConnector::disconnect(connection)
+
 }
 
 
-
 predictOnSample <- function(
-  connection,
+  connectionDetails,
   modelDir,
+  cdmDatabaseSchema,
   outcomeDatabaseSchema,
   outcomeTable,
   outcomeIds,
   resultDatabaseSchema,
   sampledCohortsTable = "sampled_cohorts",
-  exposureIds,
-  databaseDetails
+  exposureIds
 ) {
 
   settings <- readr::read_csv(
@@ -183,16 +185,28 @@ predictOnSample <- function(
     show_col_types = FALSE
   )
 
+  databaseDetails <- PatientLevelPrediction::createDatabaseDetails(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortDatabaseSchema = resultDatabaseSchema,
+    cohortTable = sampledCohortsTable,
+    outcomeDatabaseSchema = outcomeDatabaseSchema,
+    outcomeTable = outcomeTable
+  )
 
   for (i in seq_along(exposureIds)) {
 
     thisTargetId <- exposureIds[i]
     message(glue::glue("Predicting on targetId { thisTargetId }"))
 
+
     for (j in seq_along(outcomeIds)) {
 
-      message(glue::glue("Outcome id { thisOutcomeId }"))
+      databaseDetails$targetId <- thisTargetId
+      databaseDetails$outcomeIds <- thisOutcomeId
+
       thisOutcomeId <- outcomeIds[j]
+      message(glue::glue("Outcome id { thisOutcomeId }"))
       if (thisOutcomeId %in% settings$outcomeId) {
 
         thisOutcomeAnalysisId <- settings |>
@@ -232,34 +246,6 @@ simulateOutcomes <- function(
   seed = 1
 ) {
 
-  simulateEventForPerson <- function(
-    linearPredictor,
-    baselineSurvival,
-    times,
-    seed
-  ) {
-
-    if (missing(seed)) {
-      seed <- sample(1:1e8, 1)
-      message(glue::glue("No seed provided. Using seed: { seed }"))
-    }
-
-    if (length(times) != length(baselineSurvival)) {
-      stop("Differing lengths of times and baselineSurvival!")
-    }
-
-    randomUnif <- withr::with_seed(seed, runif(1))
-    person <- baselineSurvival ^ exp(linearPredictor)
-    idx <- which(person < randomUnif)
-    if (length(idx) == 0) {
-      eventTime <- Inf
-    } else {
-      eventTime <- times[which(person < randomUnif) |> min()]
-    }
-
-    eventTime
-
-  }
 
   seeds <- withr::with_seed(seed, sample(1:1e8, dim(prediction)[1]))
   baselineSurvivalAtPrediction <- plpResult$model$model$baselineSurvival$surv |>
@@ -281,6 +267,96 @@ simulateOutcomes <- function(
 
 }
 
+
+generateCensoringTable <- function(
+  connectionDetails,
+  censoringTime,
+  exposureDatabaseSchema,
+  exposureTable,
+  outcomeDatabaseSchema,
+  outcomeTable,
+  outcomeId,
+  resultDatabaseSchema,
+  resultTable
+) {
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+
+  sqlQuery <- glue::glue(
+    "
+  CREATE TABLE {resultDatabaseSchema}.{resultTable} AS
+  WITH censor_base AS (
+    SELECT
+      subject_id,
+      cohort_start_date AS exp_start,
+      cohort_end_date,
+      CASE
+        WHEN cohort_end_date < date_add(cohort_start_date, INTERVAL '{censoringTime} days')
+          THEN cohort_end_date
+        ELSE date_add(cohort_start_date, INTERVAL '{censoringTime} days')
+      END AS censor_date
+    FROM {exposureDatabaseSchema}.{exposureTable}
+  )
+  SELECT
+    1 AS cohort_definition_id,
+    cb.subject_id,
+    cb.censor_date AS cohort_start_date,
+    cb.censor_date AS cohort_end_date,
+  FROM censor_base cb
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM {outcomeDatabaseSchema}.{outcomeTable} o
+    WHERE o.subject_id = cb.subject_id
+      AND o.cohort_definition_id = {outcomeId}
+      AND o.cohort_start_date >= cb.exp_start
+      AND o.cohort_start_date <= cb.censor_date
+  )
+  "
+  )
+
+
+  DatabaseConnector::executeSql(
+    connection = connection,
+    sql = sqlQuery
+  )
+
+  message(
+    glue::glue(
+      "Generated censoring table { resultTable }"
+    )
+  )
+
+  DatabaseConnector::disconnect(connection)
+}
+
+simulateEventForPerson <- function(
+  linearPredictor,
+  baselineSurvival,
+  times,
+  seed
+) {
+
+  if (missing(seed)) {
+    seed <- sample(1:1e8, 1)
+    message(glue::glue("No seed provided. Using seed: { seed }"))
+  }
+
+  if (length(times) != length(baselineSurvival)) {
+    stop("Differing lengths of times and baselineSurvival!")
+  }
+
+  randomUnif <- withr::with_seed(seed, runif(1))
+  person <- baselineSurvival ^ exp(linearPredictor)
+  idx <- which(person < randomUnif)
+  if (length(idx) == 0) {
+    eventTime <- Inf
+  } else {
+    eventTime <- times[which(person < randomUnif) |> min()]
+  }
+
+  eventTime
+
+}
 
 runPlasmodeSimulation <- function(
   outcomeModelSettings,
