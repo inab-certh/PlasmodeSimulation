@@ -133,7 +133,9 @@ generateSample <- function(
     FROM (
       SELECT 
         *,
-        ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY cohort_start_date ASC) as rn
+        ROW_NUMBER() OVER (
+          PARTITION BY subject_id ORDER BY cohort_start_date ASC
+        ) as rn
       FROM { exposureDatabaseSchema }.{ exposureTable }
       WHERE subject_id IN (
         SELECT subject_id FROM { resultDatabaseSchema }.temp_sampled_subject_ids
@@ -241,14 +243,14 @@ predictOnSample <- function(
 
 
 simulateOutcomes <- function(
-  plpResult,
   prediction,
+  baselineSurvival,
   seed = 1
 ) {
 
 
   seeds <- withr::with_seed(seed, sample(1:1e8, dim(prediction)[1]))
-  baselineSurvivalAtPrediction <- plpResult$model$model$baselineSurvival$surv |>
+  baselineSurvivalAtPrediction <- baselineSurvival$surv |>
     tail(1)
 
   linearPredictor <- log(
@@ -257,16 +259,122 @@ simulateOutcomes <- function(
   )
 
 
-  purrr::map2_dbl(
+  result <- purrr::map2_dbl(
     .x = linearPredictor,
     .y = seeds,
     .f = simulateEventForPerson,
-    baselineSurvival = plpResult$model$model$baselineSurvival$surv,
-    times = plpResult$model$model$baselineSurvival$time
+    baselineSurvival = baselineSurvival$surv,
+    times = baselineSurvival$time
+  )
+
+  data.frame(
+    rowId = prediction$rowId,
+    subjectId = prediction$subjectId,
+    time = result
   )
 
 }
 
+
+simulateEventForPerson <- function(
+  linearPredictor,
+  baselineSurvival,
+  times,
+  seed
+) {
+
+  if (missing(seed)) {
+    seed <- sample(1:1e8, 1)
+    message(glue::glue("No seed provided. Using seed: { seed }"))
+  }
+
+  if (length(times) != length(baselineSurvival)) {
+    stop("Differing lengths of times and baselineSurvival!")
+  }
+
+  randomUnif <- withr::with_seed(seed, runif(1))
+  person <- baselineSurvival ^ exp(linearPredictor)
+  idx <- which(person < randomUnif)
+  if (length(idx) == 0) {
+    eventTime <- Inf
+  } else {
+    eventTime <- times[which(person < randomUnif) |> min()]
+  }
+
+  eventTime
+
+}
+
+runPlasmodeSimulation <- function(
+  outcomeModelSettings,
+  samplSettings,
+  databaseSettings,
+  ...
+) {
+
+  # Train the outcome models
+  # Draw a random sample from existing cohorts
+  # Predict outcome probabilities in sampled patients
+  # Create simulated outcome table
+
+  return(TRUE)
+
+}
+
+updateEventPrediction <- function(
+  databaseDetails,
+  modelSettings,
+  modelDir,
+  timepoint,
+  outcomeId,
+  newCoefficients,
+  newBaselineSurvival
+) {
+
+  databaseDetails$targetId <- 1
+  databaseDetails$outcomeIds <- outcomeId
+  plpData <- PatientLevelPrediction::getPlpData(
+    databaseDetails = databaseDetails,
+    covariateSettings = modelSettings$covariateSettings
+  )
+
+  population <- PatientLevelPrediction::createStudyPopulation(
+    plpData = plpData,
+    outcomeId = outcomeId,
+    populationSettings = modelSettings$populationSettings
+  )
+
+  plpModel <- PatientLevelPrediction::loadPlpModel(modelDir)
+
+
+  if (missing(newCoefficients)) {
+    newCoefficients <- plpModel$model$coefficients
+    message("Using existing model coefficients")
+  }
+
+  if (missing(newBaselineSurvival)) {
+    newBaselineSurvival <- plpModel$model$baselineSurvival
+    message("Using existing baseline survival")
+  }
+
+  plpModel$model$coefficients <- newCoefficients
+  plpModel$model$baselineSurvival <- newBaselineSurvival
+
+  prediction <- PatientLevelPrediction::predictPlp(
+    plpModel = plpModel,
+    plpData = plpData,
+    population = population,
+    timepoint = timepoint
+  )
+
+  list(
+    prediction = prediction,
+    coefficitents = newCoefficients,
+    baselineSurvival = newBaselineSurvival,
+    covariates = plpData$covariates
+  )
+
+}
 
 generateCensoringTable <- function(
   connectionDetails,
@@ -327,49 +435,4 @@ generateCensoringTable <- function(
   )
 
   DatabaseConnector::disconnect(connection)
-}
-
-simulateEventForPerson <- function(
-  linearPredictor,
-  baselineSurvival,
-  times,
-  seed
-) {
-
-  if (missing(seed)) {
-    seed <- sample(1:1e8, 1)
-    message(glue::glue("No seed provided. Using seed: { seed }"))
-  }
-
-  if (length(times) != length(baselineSurvival)) {
-    stop("Differing lengths of times and baselineSurvival!")
-  }
-
-  randomUnif <- withr::with_seed(seed, runif(1))
-  person <- baselineSurvival ^ exp(linearPredictor)
-  idx <- which(person < randomUnif)
-  if (length(idx) == 0) {
-    eventTime <- Inf
-  } else {
-    eventTime <- times[which(person < randomUnif) |> min()]
-  }
-
-  eventTime
-
-}
-
-runPlasmodeSimulation <- function(
-  outcomeModelSettings,
-  samplSettings,
-  databaseSettings,
-  ...
-) {
-
-  # Train the outcome models
-  # Draw a random sample from existing cohorts
-  # Predict outcome probabilities in sampled patients
-  # Create simulated outcome table
-
-  return(TRUE)
-
 }
