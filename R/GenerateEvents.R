@@ -1,3 +1,41 @@
+generateEventForSubject <- function(
+  rowId,
+  plpModel,
+  covariateData,
+  seed
+) {
+
+  if (missing(seed)) {
+    seed <- sample(1:1e6, 1)
+  }
+
+  times <- plpModel$model$baselineSurvival$time
+  baselineSurvival <- plpModel$model$baselineSurvival$surv
+  idx <- which(!duplicated(baselineSurvival))
+
+  xx <- withr::with_seed(seed, runif(1, 0, 1))
+
+  covariates <- covariateData$covariates |>
+    dplyr::collect() |>
+    dplyr::filter(rowId == !!rowId)
+
+  predictions <- predictSurvivalOnSubject(
+    rowId = rowId,
+    plpModel = plpModel,
+    covariates = covariates
+  )
+
+  if (xx < dplyr::last(predictions)) {
+    result <- Inf
+  } else {
+    k <- which(predictions < xx) |> min()
+    result <- times[idx[k]]
+  }
+
+  list(rowId = rowId, time = result)
+
+}
+
 predictSurvivalOnSubject <- function(
   rowId,
   plpModel,
@@ -56,40 +94,3 @@ predictSurvivalOnSubject <- function(
 
 }
 
-generateEventForSubject <- function(
-  rowId,
-  plpModel,
-  covariateData,
-  seed
-) {
-
-  if (missing(seed)) {
-    seed <- sample(1:1e6, 1)
-  }
-
-  times <- plpModel$model$baselineSurvival$time
-  baselineSurvival <- plpModel$model$baselineSurvival$surv
-  idx <- which(!duplicated(baselineSurvival))
-
-  xx <- withr::with_seed(seed, runif(1, 0, 1))
-
-  covariates <- covariateData$covariates |>
-    dplyr::collect() |>
-    dplyr::filter(rowId == !!rowId)
-
-  predictions <- predictSurvivalOnSubject(
-    rowId = rowId,
-    plpModel = plpModel,
-    covariates = covariates
-  )
-
-  if (xx < dplyr::last(predictions)) {
-    result <- Inf
-  } else {
-  k <- which(predictions < xx) |> min()
-  result <- times[idx[k]]
-  }
-
-  list(rowId = rowId, time = result)
-
-}
