@@ -14,15 +14,21 @@ generateEventForSubject <- function(
   idx <- which(!duplicated(baselineSurvival))
 
   xx <- withr::with_seed(seed, runif(1, 0, 1))
+  thisRowId <- rowId
 
   covariates <- covariateData$covariates |>
     dplyr::collect() |>
-    dplyr::filter(rowId == !!rowId)
+    dplyr::filter(rowId == thisRowId)
+
+  nonZeroCoef <- plpModel$model$coefficients |>
+    dplyr::filter(betas != 0) |>
+    dplyr::mutate(covariateIds = as.numeric(covariateIds))
 
   predictions <- predictSurvivalOnSubject(
-    rowId = rowId,
+    rowId = thisRowId,
     plpModel = plpModel,
-    covariates = covariates
+    covariates = covariates,
+    nonZeroCoef = nonZeroCoef
   )
 
   if (xx < dplyr::last(predictions)) {
@@ -38,16 +44,10 @@ generateEventForSubject <- function(
 
 predictSurvivalOnSubject <- function(
   rowId,
-  plpModel,
+  nonZeroCoef,
   covariates
 ) {
 
-  nonZeroCoef <- plpModel$model$coefficients |>
-    dplyr::filter(betas != 0) |>
-    dplyr::mutate(covariateIds = as.numeric(covariateIds))
-
-  covariates <- covariates |>
-    dplyr::filter(rowId == !!rowId)
 
   times <- plpModel$model$baselineSurvival$time
   baselineSurvival <- plpModel$model$baselineSurvival$surv
