@@ -46,11 +46,13 @@ extractCohorts <- function(
       CREATE TABLE { resultDatabaseSchema }.{ cohortTable } AS
       SELECT
           1 AS cohort_definition_id,
+          cohort_definition_id AS exposure_cohort_definition_id,
           subject_id,
           cohort_start_date,
           cohort_end_date
       FROM (
           SELECT
+              cohort_definition_id,
               subject_id,
               cohort_start_date,
               cohort_end_date,
@@ -66,94 +68,11 @@ extractCohorts <- function(
       WHERE rn = 1;
       "
     )
-  } else if (connectionDbms == "postgresql") {
-    createCohortTableIndex(
-      connection = connection,
-      cohortDatabaseSchema = exposureDatabaseSchema,
-      cohortTable = exposureTable
-    )
+  } else {
 
-    # !!!!! This may be wrong !!!!!!
-    # I am not sure if this retrieves first exposure or all
-    sql_query <- glue::glue(
-      "
-      DROP TABLE IF EXISTS { resultDatabaseSchema }.{ cohortTable };
-      CREATE TABLE { resultDatabaseSchema }.{ cohortTable } AS
-      SELECT DISTINCT ON (subject_id)
-             1           AS cohort_definition_id,
-             subject_id,
-             cohort_start_date,
-             cohort_end_date
-      FROM { exposureDatabaseSchema }.{ exposureTable }
-      WHERE cohort_definition_id IN (
-        { glue::glue_collapse(exposureIds, sep = \", \") }
-      )
-      ORDER BY subject_id,
-               cohort_start_date,
-               cohort_end_date;      
-    "
-    )
+    stop(glue::glue("{ connectionDbms } not supported yet."))
+
   }
-
-
-  # if (firstExposureOnly) {
-
-  #   if (connectionDbms == "duckdb") {
-  #     sql_query <- glue::glue(
-  #       "
-  #       DROP TABLE IF EXISTS { resultDatabaseSchema }.{ cohortTable };
-  #       CREATE TABLE { resultDatabaseSchema }.{ cohortTable } AS
-  #       SELECT
-  #           1 AS cohort_definition_id,
-  #           subject_id,
-  #           cohort_start_date,
-  #           cohort_end_date
-  #       FROM (
-  #           SELECT
-  #               subject_id,
-  #               cohort_start_date,
-  #               cohort_end_date,
-  #               ROW_NUMBER() OVER (
-  #                   PARTITION BY subject_id
-  #                   ORDER BY cohort_start_date, cohort_end_date
-  #               ) AS rn
-  #           FROM { exposureDatabaseSchema }.{ exposureTable }
-  #           WHERE cohort_definition_id IN (
-  #             { glue::glue_collapse(exposureIds, sep = \", \") }
-  #           )
-  #       ) sub
-  #       WHERE rn = 1;
-  #     "
-  #     )
-
-  #   } else if (connectionDbms == "postgresql") {
-
-  #     createCohortTableIndex(
-  #       connection = connection,
-  #       cohortDatabaseSchema = exposureDatabaseSchema,
-  #       cohortTable = exposureTable
-  #     )
-  #     sql_query <- glue::glue(
-  #       "
-  #       DROP TABLE IF EXISTS { resultDatabaseSchema }.{ cohortTable };
-  #       CREATE TABLE { resultDatabaseSchema }.{ cohortTable } AS
-  #       SELECT DISTINCT ON (subject_id)
-  #              1 AS cohort_definition_id,
-  #              subject_id,
-  #              cohort_start_date,
-  #              cohort_end_date
-  #       FROM { exposureDatabaseSchema }.{ exposureTable }
-  #       WHERE cohort_definition_id IN (
-  #         { glue::glue_collapse(exposureIds, sep = \", \") }
-  #       )
-  #       ORDER BY subject_id,
-  #                cohort_start_date,
-  #                cohort_end_date;      
-  #      "
-  #     )
-  #   }
-
-  # }
 
   DatabaseConnector::executeSql(
     connection = connection,
