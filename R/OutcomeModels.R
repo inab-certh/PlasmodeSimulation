@@ -376,6 +376,8 @@ updateEventPrediction <- function(
 
 }
 
+
+
 generateCensoringTable <- function(
   connectionDetails,
   censoringTime,
@@ -383,56 +385,73 @@ generateCensoringTable <- function(
   exposureTable,
   outcomeDatabaseSchema,
   outcomeTable,
-  outcomeId,
+  outcomeIds,
   resultDatabaseSchema,
   resultTable
 ) {
 
   connection <- DatabaseConnector::connect(connectionDetails)
-
-  sqlQuery <- glue::glue(
-    "
-  CREATE TABLE {resultDatabaseSchema}.{resultTable} AS
-  WITH censor_base AS (
-    SELECT
-      subject_id,
-      cohort_start_date AS exp_start,
-      cohort_end_date,
-      CASE
-        WHEN cohort_end_date < date_add(cohort_start_date, INTERVAL '{censoringTime} days')
-          THEN cohort_end_date
-        ELSE date_add(cohort_start_date, INTERVAL '{censoringTime} days')
-      END AS censor_date
-    FROM {exposureDatabaseSchema}.{exposureTable}
-  )
-  SELECT
-    1 AS cohort_definition_id,
-    cb.subject_id,
-    cb.censor_date AS cohort_start_date,
-    cb.censor_date AS cohort_end_date,
-  FROM censor_base cb
-  WHERE NOT EXISTS (
-    SELECT 1
-    FROM {outcomeDatabaseSchema}.{outcomeTable} o
-    WHERE o.subject_id = cb.subject_id
-      AND o.cohort_definition_id = {outcomeId}
-      AND o.cohort_start_date >= cb.exp_start
-      AND o.cohort_start_date <= cb.censor_date
-  )
-  "
-  )
-
-
-  DatabaseConnector::executeSql(
-    connection = connection,
-    sql = sqlQuery
-  )
-
-  message(
+  buildSelectSql <- function(outcomeId) {
     glue::glue(
-      "Generated censoring table { resultTable }"
+      "
+      WITH censor_base AS (
+        SELECT
+          subject_id,
+          cohort_start_date AS exp_start,
+          cohort_end_date,
+          CASE
+            WHEN cohort_end_date < DATE_ADD(cohort_start_date, INTERVAL '{censoringTime} days')
+              THEN cohort_end_date
+            ELSE DATE_ADD(cohort_start_date, INTERVAL '{censoringTime} days')
+          END AS censor_date
+        FROM {exposureDatabaseSchema}.{exposureTable}
+      )
+      SELECT
+        {outcomeId} AS cohort_definition_id,
+        cb.subject_id,
+        cb.censor_date        AS cohort_start_date,
+        cb.censor_date        AS cohort_end_date
+      FROM censor_base cb
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM {outcomeDatabaseSchema}.{outcomeTable} o
+        WHERE o.subject_id           = cb.subject_id
+          AND o.cohort_definition_id = {outcomeId}
+          AND o.cohort_start_date   >= cb.exp_start
+          AND o.cohort_start_date   <= cb.censor_date
+      )
+      "
     )
-  )
+  }
 
+  tableNames <- DatabaseConnector::getTableNames(connection)
+  if (!resultTable %in% tableNames) {
+    createSql <- glue::glue(
+      "
+       CREATE TABLE { resultDatabaseSchema }.{ resultTable } (
+         cohort_definition_id INTEGER,
+         subject_id           BIGINT,
+         cohort_start_date    DATE,
+         cohort_end_date      DATE
+       );
+       "
+    )
+    DatabaseConnector::executeSql(connection, createSql)
+  }
+
+  for (i in seq_along(outcomeIds)) {
+    outcomeId <- outcomeIds[i]
+    selectSql <- buildSelectSql(outcomeId)
+
+    insertSql <- glue::glue(
+      "INSERT INTO {resultDatabaseSchema}.{resultTable}\n{selectSql}"
+    )
+    DatabaseConnector::executeSql(connection, insertSql)
+    message(sprintf(
+      "Appended outcomeId = %s to %s.%s",
+      outcomeId, resultDatabaseSchema, resultTable
+    ))
+  }
+  message("All outcomeIds processed.")
   DatabaseConnector::disconnect(connection)
 }
