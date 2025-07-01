@@ -129,7 +129,11 @@ generateSample <- function(
   # Only the earliest is selected
   sqlQuery <- glue::glue(
     "
-    SELECT cohort_definition_id, subject_id, cohort_start_date, cohort_end_date
+    SELECT
+      cohort_definition_id,
+      subject_id,
+      cohort_start_date,
+      cohort_end_date
     FROM (
       SELECT 
         *,
@@ -396,6 +400,7 @@ generateCensoringTable <- function(
       "
       WITH censor_base AS (
         SELECT
+          exposure_cohort_definition_id,
           subject_id,
           cohort_start_date AS exp_start,
           cohort_end_date,
@@ -408,6 +413,7 @@ generateCensoringTable <- function(
       )
       SELECT
         {outcomeId} AS cohort_definition_id,
+        exposure_cohort_definition_id,
         cb.subject_id,
         cb.censor_date        AS cohort_start_date,
         cb.censor_date        AS cohort_end_date
@@ -429,10 +435,11 @@ generateCensoringTable <- function(
     createSql <- glue::glue(
       "
        CREATE TABLE { resultDatabaseSchema }.{ resultTable } (
-         cohort_definition_id INTEGER,
-         subject_id           BIGINT,
-         cohort_start_date    DATE,
-         cohort_end_date      DATE
+         cohort_definition_id          INTEGER,
+         exposure_cohort_definition_id INTEGER,
+         subject_id                    BIGINT,
+         cohort_start_date             DATE,
+         cohort_end_date               DATE
        );
        "
     )

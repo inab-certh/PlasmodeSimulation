@@ -17,6 +17,7 @@ Imports:
     PatientLevelPrediction (>= 6.4.1),
     polspline,
     purrr,
+    roxygen2,
     withr
 Suggests:
     devtools,
