@@ -1,17 +1,16 @@
-trainOutcomeModels <- function(
-  outcomeModelSettings,
+trainModels <- function(
+  modelSettings,
   databaseDetails,
   logSettings = PatientLevelPrediction::createLogSettings(),
   saveDirectory = "./OutcomeModels"
 ) {
 
-  outcomeIds <- outcomeModelSettings$outcomeIds
-  targetId <- outcomeModelSettings$targetId
+  outcomeIds <- modelSettings$outcomeIds
 
   modelDesignList <- outcomeIds |>
     purrr::map(
       ~ list(
-        targetId = outcomeModelSettings$targetId,
+        targetId = modelSettings$targetId,
         outcomeId = .x
       )
     ) |>
@@ -19,40 +18,40 @@ trainOutcomeModels <- function(
 
   components <- list(
     executeSettings = list(
-      flag = outcomeModelSettings$useSameExecuteSettings,
-      value = outcomeModelSettings$executeSettings
+      flag = modelSettings$useSameExecuteSettings,
+      value = modelSettings$executeSettings
     ),
     modelSettings = list(
-      flag = outcomeModelSettings$useSameModelSettings,
-      value = outcomeModelSettings$modelSettings
+      flag = modelSettings$useSameModelSettings,
+      value = modelSettings$modelSettings
     ),
     splitSettings = list(
-      flag = outcomeModelSettings$useSameSplitSettings,
-      value = outcomeModelSettings$splitSettings
+      flag = modelSettings$useSameSplitSettings,
+      value = modelSettings$splitSettings
     ),
     sampleSettings = list(
-      flag = outcomeModelSettings$useSameSampleSettings,
-      value = outcomeModelSettings$sampleSettings
+      flag = modelSettings$useSameSampleSettings,
+      value = modelSettings$sampleSettings
     ),
     covariateSettings = list(
-      flag = outcomeModelSettings$useSameCovariateSettings,
-      value = outcomeModelSettings$covariateSettings
+      flag = modelSettings$useSameCovariateSettings,
+      value = modelSettings$covariateSettings
     ),
     populationSettings = list(
-      flag = outcomeModelSettings$useSamePopulationSettings,
-      value = outcomeModelSettings$populationSettings
+      flag = modelSettings$useSamePopulationSettings,
+      value = modelSettings$populationSettings
     ),
     preprocessSettings = list(
-      flag = outcomeModelSettings$useSamePreprocessSettings,
-      value = outcomeModelSettings$preprocessSettings
+      flag = modelSettings$useSamePreprocessSettings,
+      value = modelSettings$preprocessSettings
     ),
     restrictPlpDataSettings = list(
-      flag = outcomeModelSettings$useSameRestrictPlpDataSettings,
-      value = outcomeModelSettings$restrictPlpDataSettings
+      flag = modelSettings$useSameRestrictPlpDataSettings,
+      value = modelSettings$restrictPlpDataSettings
     ),
     featureEngineeringSettings = list(
-      flag = outcomeModelSettings$useSameFeatureEngineeringSettings,
-      value = outcomeModelSettings$featureEngineeringSettings
+      flag = modelSettings$useSameFeatureEngineeringSettings,
+      value = modelSettings$featureEngineeringSettings
     )
   )
 
@@ -461,4 +460,180 @@ generateCensoringTable <- function(
   }
   message("All outcomeIds processed.")
   DatabaseConnector::disconnect(connection)
+}
+
+checkEventModels <- function(directory) {
+
+  .check <- function(directory) {
+    checkDir <- file.path(directory, "plpResult")
+    if (dir.exists(checkDir)) {
+      model <- PatientLevelPrediction::loadPlpModel(
+        file.path(checkDir, "model")
+      )
+      if (model$model$modelStatus != "OK") {
+        FALSE
+      } else {
+        TRUE
+      }
+    } else {
+      FALSE
+    }
+  }
+
+  directory <- gsub("/+$", "", directory)
+
+  settings <- readr::read_csv(
+    file.path(directory, "settings.csv"),
+    show_col_types = FALSE
+  )
+
+  analysisIds <- settings |>
+    dplyr::pull(analysisId)
+
+  checkDirectories <- glue::glue(
+    "{ directory }/{ analysisIds }"
+  )
+
+  checkResults <- purrr::map_lgl(checkDirectories, .check)
+
+  result <- dplyr::tibble(
+    analysisId = analysisIds,
+    directory = checkDirectories,
+    checkPassed = checkResults
+  ) |>
+    dplyr::mutate(directory = as.character(directory))
+
+  if (any(!result$checkPassed)) {
+    failedAnalysisIds <- result |>
+      dplyr::filter(!checkPassed) |>
+      dplyr::pull(analysisId)
+    message(
+      glue::glue(
+        "Check failed for analyses : {
+           glue::glue_collapse(failedAnalysisIds, sep = ', ')
+         }"
+      )
+    )
+  } else {
+    message("All models passed check")
+  }
+
+  settings |>
+    dplyr::left_join(result, by = "analysisId")
+
+}
+
+
+cleanupExposureTable <- function(
+  connectionDetails,
+  resultDatabaseSchema,
+  resultTable,
+  cleanup = "max"
+) {
+
+  message("Cleaning up table ", resultTable)
+  connection <- DatabaseConnector::connect(connectionDetails)
+  cleanupFunction <- match.fun(cleanup)
+
+  exposures <- DatabaseConnector::querySql(
+    connection = connection,
+    glue::glue(
+      "
+      SELECT * FROM { resultDatabaseSchema }.{ resultTable };
+      "
+    )
+  )
+
+  exposuresDT <- as.data.table(exposures)
+
+  result <- exposuresDT[
+    , .(COHORT_END_DATE = cleanupFunction(COHORT_END_DATE)),
+    by = .(COHORT_DEFINITION_ID, SUBJECT_ID, COHORT_START_DATE)
+  ]
+
+  DatabaseConnector::insertTable(
+    connection = connection,
+    data = result,
+    dropTableIfExists = TRUE,
+    createTable = TRUE,
+    tableName = resultTable
+  )
+
+  DatabaseConnector::disconnect(connection)
+
+  message("Done")
+}
+
+
+trainAllModels <- function(
+  connectionDetails,
+  resultDatabaseSchema,
+  exposureDatabaseSchema,
+  exposureTable,
+  exposureIds,
+  databaseDetails,
+  outcomeModelSettings,
+  censoringModelSettings,
+  censoringTime,
+  saveDir
+) {
+
+  message("Start training of all models...")
+
+  extractCohorts(
+    connectionDetails = connectionDetails,
+    exposureTable = exposureTable,
+    exposureIds = exposureIds,
+    cohortTable = "combined_target",
+    resultDatabaseSchema = resultDatabaseSchema,
+    exposureDatabaseSchema = exposureDatabaseSchema,
+    cdmDatabaseSchema = databaseDetails$cdmDatabaseSchema
+  )
+
+  outcomeModelSaveDir <- file.path(saveDir, "outcomes")
+
+  message("Training outcome models...")
+  trainModels(
+    modelSettings = outcomeModelSettings,
+    databaseDetails = databaseDetails,
+    saveDirectory = outcomeModelSaveDir
+  )
+
+
+  message("Training censoring models...")
+
+  generateCensoringTable(
+    connectionDetails = connectionDetails,
+    censoringTime = censoringTime,
+    exposureDatabaseSchema = exposureDatabaseSchema,
+    exposureTable = "combined_target",
+    outcomeDatabaseSchema = databaseDetails$outcomeDatabaseSchema,
+    outcomeTable = databaseDetails$outcomeTable,
+    outcomeIds = outcomeModelSettings$outcomeIds,
+    resultDatabaseSchema = resultDatabaseSchema,
+    resultTable = "combined_censoring"
+  )
+
+  censoringModelSaveDir <- file.path(saveDir, "censoring")
+  trainModels(
+    modelSettings = censoringModelSettings,
+    databaseDetails = censoringDatabaseDetails,
+    saveDirectory = censoringModelSaveDir
+  )
+
+  message("Checking outcome model status...")
+  outcomeSettings <- checkEventModels(outcomeModelSaveDir) |>
+    dplyr::mutate(model = "outcome")
+
+  message("Checking censoring model status...")
+  censoringSettings <- checkEventModels(censoringModelSaveDir) |>
+    dplyr::mutate(model = "censoring")
+
+  outcomeSettings |>
+    dplyr::bind_rows(censoringSettings) |>
+    dplyr::relocate("model") |>
+    readr::write_csv(file.path(saveDir, "overview.csv"))
+
+  message("Finished training models")
+
 }
