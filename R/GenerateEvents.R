@@ -1,3 +1,339 @@
+runSampleGeneration <- function(
+  connectionDetails,
+  size,
+  cdmDatabaseSchema,
+  exposureDatabaseSchema,
+  exposureTable,
+  exposureIds,
+  resultDatabaseSchema,
+  simulatedExposureTable,
+  simulatedOutcomeTable,
+  outcomeModelSettings,
+  censoringModelSettings,
+  modelDir,
+  saveDir
+) {
+
+  if (missing(simulatedExposureTable)) {
+    simulatedExposureTable <- "simulated_exposures"
+  }
+
+  if (missing(simulatedOutcomeTable)) {
+    simulatedOutcomeTable <- "simulated_outcomes"
+  }
+
+  if (missing(exposureIds)) {
+    connection <- DatabaseConnector::connect(connectionDetails)
+    exposureIds <- DatabaseConnector::querySql(
+      connection = connection,
+      sql = glue::glue(
+        "
+        SELECT DISTINCT cohort_definition_id
+        FROM { exposureDatabaseSchema }.{ exposureTable }
+        "
+      )
+    ) |>
+      dplyr::arrange(COHORT_DEFINITION_ID) |>
+      dplyr::pull(COHORT_DEFINITION_ID)
+    DatabaseConnector::disconnect(connection)
+  }
+
+  dirsToCreate <- c(
+    file.path(saveDir, "censoring"),
+    file.path(saveDir, "outcomes")
+  )
+
+  purrr::walk(dirsToCreate, \(x) {
+    if (!dir.exists(x)) {
+      dir.create(x, recursive = TRUE)
+      message("Created directory ", x)
+    }
+  })
+
+  generateSample(
+    connectionDetails = connectionDetails,
+    size = size,
+    exposureDatabaseSchema = exposureDatabaseSchema,
+    exposureTable = exposureTable,
+    exposureIds = exposureIds,
+    resultDatabaseSchema = resultDatabaseSchema,
+    simulatedCohortTable = "sampled_cohorts"
+  )
+
+  overview <- readr::read_csv(
+    file = file.path(modelDir, "overview.csv"),
+    show_col_types = FALSE
+  )
+
+  validOutcomeIds <- overview |>
+    dplyr::filter(checkPassed, model == "outcome") |>
+    dplyr::pull(outcomeId) |>
+    unique()
+
+  modelsToFit <- overview |>
+    dplyr::filter(checkPassed) |>
+    dplyr::filter(outcomeId %in% validOutcomeIds)
+
+  covariateData <- getSampledCohortsCovariateData(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortTable = "sampled_cohorts",
+    cohortDatabaseSchema = resultDatabaseSchema,
+    covariateSettings = outcomeModelSettings$covariateSettings
+  )
+
+  Andromeda::saveAndromeda(
+    andromeda = covariateData,
+    fileName = file.path(saveDir, "outcomes", "covariateData"),
+    maintainConnection = TRUE
+  )
+
+  analysisIds <- modelsToFit |>
+    dplyr::filter(model == "outcome") |>
+    dplyr::pull(analysisId)
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+  tableNames <- DatabaseConnector::getTableNames(connection)
+
+  if (simulatedOutcomeTable %in% tableNames) {
+    DatabaseConnector::executeSql(
+      connection = connection,
+      sql = glue::glue(
+        "DROP TABLE { resultDatabaseSchema }.{ simulatedOutcomeTable };"
+      )
+    )
+    message("Dropped old table with simulated outcomes")
+  }
+
+  if (simulatedExposureTable %in% tableNames) {
+    DatabaseConnector::executeSql(
+      connection = connection,
+      sql = glue::glue(
+        "DROP TABLE { resultDatabaseSchema }.{ simulatedExposureTable };"
+      )
+    )
+    message("Dropped old table with simulated exposures")
+  }
+  DatabaseConnector::disconnect(connection)
+
+  for (i in seq_along(analysisIds)) {
+
+    message(
+      glue::glue(
+        "Generating outcome times for analysis: { analysisIds[i] }"
+      )
+    )
+
+    thisModelDir <- modelsToFit |>
+      dplyr::filter(model == "outcome", analysisId == analysisIds[i]) |>
+      dplyr::pull(directory)
+
+    outcomePlpModel <- PatientLevelPrediction::loadPlpModel(
+      file.path(thisModelDir, "plpResult", "model")
+    )
+
+    outcomeLinearPredictor <- computeLinearPredictor(
+      plpModel = outcomePlpModel,
+      covariateData = covariateData
+    )
+
+    outcomeTimes <- generateEventForSubject(
+      baselineSurvival = outcomePlpModel$model$baselineSurvival,
+      linearPredictor = outcomeLinearPredictor
+    )
+
+    generateNewOutcomeTable(
+      connectionDetails = connectionDetails,
+      exposureDatabaseSchema = resultDatabaseSchema,
+      exposureTable = "sampled_cohorts",
+      resultDatabaseSchema = resultDatabaseSchema,
+      resultTable = simulatedOutcomeTable,
+      eventTimes = outcomeTimes
+    )
+
+  }
+
+  covariateData <- getSampledCohortsCovariateData(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortTable = "sampled_cohorts",
+    cohortDatabaseSchema = resultDatabaseSchema,
+    covariateSettings = censoringModelSettings$covariateSettings
+  )
+
+  Andromeda::saveAndromeda(
+    andromeda = covariateData,
+    fileName = file.path(saveDir, "censoring", "covariateData"),
+    maintainConnection = TRUE
+  )
+
+  analysisIds <- modelsToFit |>
+    dplyr::filter(model == "censoring") |>
+    dplyr::pull(analysisId)
+
+  for (i in seq_along(analysisIds)) {
+
+    message(
+      glue::glue(
+        "Generating censoring times for analysis: { analysisIds[i] }"
+      )
+    )
+
+    thisModelDir <- modelsToFit |>
+      dplyr::filter(model == "censoring", analysisId == analysisIds[i]) |>
+      dplyr::pull(directory)
+
+    censoringPlpModel <- PatientLevelPrediction::loadPlpModel(
+      file.path(thisModelDir, "plpResult", "model")
+    )
+
+    censoringLinearPredictor <- computeLinearPredictor(
+      plpModel = censoringPlpModel,
+      covariateData = covariateData
+    )
+
+    censoringTimes <- generateEventForSubject(
+      baselineSurvival = censoringPlpModel$model$baselineSurvival,
+      linearPredictor = censoringLinearPredictor
+    )
+
+    generateNewExposureTable(
+      connectionDetails = connectionDetails,
+      exposureDatabaseSchema = resultDatabaseSchema,
+      exposureTable = "sampled_cohorts",
+      resultDatabaseSchema = resultDatabaseSchema,
+      resultTable = simulatedExposureTable,
+      eventTimes = censoringTimes
+    )
+  }
+
+  cleanupExposureTable(
+    connectionDetails = connectionDetails,
+    resultDatabaseSchema = resultDatabaseSchema,
+    resultTable = simulatedExposureTable,
+    cleanup = max
+  )
+
+  suppressMessages(connection <- DatabaseConnector::connect(connectionDetails))
+  n <- DatabaseConnector::querySql(
+    connection = connection,
+    sql = glue::glue(
+      "
+      SELECT COUNT(*) n FROM { resultDatabaseSchema }.{ simulatedExposureTable }
+      "
+    )
+  ) |> dplyr::pull(N)
+
+  message(glue::glue("Simulated population of size {n}"))
+
+}
+
+
+getSampledCohortsCovariateData <- function(
+  connectionDetails,
+  cdmDatabaseSchema,
+  cohortTable,
+  cohortIds,
+  cohortDatabaseSchema,
+  covariateSettings
+) {
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection), add = TRUE)
+
+  if (missing(cohortIds)) {
+
+    sqlQuery1 <- glue::glue(
+      "
+      SELECT DISTINCT
+        cohort_definition_id,
+        source_subject_id subject_id,
+        cohort_start_date,
+        cohort_end_date
+      FROM { cohortDatabaseSchema }.{ cohortTable };
+      "
+    )
+
+    sqlQuery2 <- glue::glue(
+      "
+      SELECT subject_id, source_subject_id
+      FROM { cohortDatabaseSchema }.{ cohortTable };
+      "
+    )
+  } else {
+
+    sqlQuery1 <- glue::glue(
+      "
+      SELECT DISTINCT
+        cohort_definition_id,
+        source_subject_id subject_id,
+        cohort_start_date,
+        cohort_end_date
+      FROM { cohortDatabaseSchema }.{ cohortTable }
+      WHERE cohort_definition_id IN (
+        { glue::glue_collapse(cohortIds, sep = \", \") }
+      );
+      "
+    )
+
+    sqlQuery2 <- glue::glue(
+      "
+      SELECT subject_id, source_subject_id
+      FROM { cohortDatabaseSchema }.{ cohortTable }
+      WHERE cohort_definition_id IN (
+        { glue::glue_collapse(cohortIds, sep = \", \") }
+      );
+      "
+    )
+  }
+
+  distinctPatients <- DatabaseConnector::querySql(connection, sqlQuery1)
+  DatabaseConnector::insertTable(
+    connection = connection,
+    data = distinctPatients,
+    dropTableIfExists = TRUE,
+    createTable = TRUE,
+    tableName = "temp_distinct_patients",
+  )
+
+  covariateData <- FeatureExtraction::getDbCovariateData(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortTable = "temp_distinct_patients",
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    covariateSettings = covariateSettings
+  )
+
+  covariateData$mapSubjectIds <- DatabaseConnector::querySql(
+    connection = connection,
+    sql = sqlQuery2
+  )
+  covariateData$newCovariates <- DBI::dbGetQuery(
+    covariateData,
+    "
+    SELECT
+      m.subject_id rowId,
+      covariateId,
+      covariateValue
+    FROM covariates c
+    JOIN mapSubjectIds m ON c.rowId = m.source_subject_id;
+    "
+  )
+
+  DBI::dbExecute(covariateData, "DROP TABLE covariates;")
+  DBI::dbExecute(
+    covariateData,
+    "
+    ALTER TABLE newCovariates
+    RENAME TO covariates;
+    "
+  )
+
+  DatabaseConnector::dbExecute(connection, "DROP TABLE temp_distinct_patients")
+
+  covariateData
+}
+
 generateSample <- function(
   connectionDetails,
   size,
@@ -42,50 +378,101 @@ generateSample <- function(
     tempTable = TRUE
   )
 
+  # sqlQuery <- glue::glue(
+  #   "
+  #   WITH target_cohorts AS (
+  #     SELECT *
+  #     FROM { exposureDatabaseSchema }.{ exposureTable }
+  #     WHERE cohort_definition_id IN (
+  #       { glue::glue_collapse(exposureIds, sep = \", \") }
+  #     )
+  #   )
+  #   SELECT *
+  #   FROM target_cohorts
+  #   WHERE subject_id IN (
+  #     SELECT subject_id FROM { resultDatabaseSchema }.temp_sampled_subject_ids
+  #   )
+  #   "
+  # )
+
+  sqlQuery <- glue::glue(
+    "
+     SELECT *
+     FROM { exposureDatabaseSchema }.{ exposureTable }
+     WHERE exposure_cohort_definition_id IN (
+       { glue::glue_collapse(exposureIds, sep = \", \") }
+     )
+    "
+  )
+
   # Selects only the first drug exposure for each patient
   # If a patient is present in two or more exposure cohorts
   # Only the earliest is selected
-  sqlQuery <- glue::glue(
-    "
-    SELECT
-      cohort_definition_id,
-      subject_id,
-      cohort_start_date,
-      cohort_end_date
-    FROM (
-      SELECT 
-        *,
-        ROW_NUMBER() OVER (
-          PARTITION BY subject_id ORDER BY cohort_start_date ASC
-        ) as rn
-      FROM { exposureDatabaseSchema }.{ exposureTable }
-      WHERE subject_id IN (
-        SELECT subject_id FROM { resultDatabaseSchema }.temp_sampled_subject_ids
-      )
-      AND cohort_definition_id IN (
-        { glue::glue_collapse(exposureIds, sep = \", \") }
-      )
-    ) sub
-    WHERE rn = 1
-    ORDER BY cohort_definition_id, subject_id, cohort_start_date
-    "
-  )
+  # sqlQuery <- glue::glue(
+  #   "
+  #   SELECT
+  #     cohort_definition_id,
+  #     subject_id,
+  #     cohort_start_date,
+  #     cohort_end_date
+  #   FROM (
+  #     SELECT
+  #       *,
+  #       ROW_NUMBER() OVER (
+  #         PARTITION BY subject_id ORDER BY cohort_start_date ASC
+  #       ) as rn
+  #     FROM { exposureDatabaseSchema }.{ exposureTable }
+  #     WHERE subject_id IN (
+  #       SELECT subject_id FROM { resultDatabaseSchema }.temp_sampled_subject_ids
+  #     )
+  #     AND cohort_definition_id IN (
+  #       { glue::glue_collapse(exposureIds, sep = \", \") }
+  #     )
+  #   ) sub
+  #   WHERE rn = 1
+  #   ORDER BY cohort_definition_id, subject_id, cohort_start_date
+  #   "
+  # )
 
   sampledCohorts <- DatabaseConnector::querySql(
     connection = connection,
     sql = sqlQuery
-  )
+  ) |>
+    dplyr::sample_n(
+      size = size,
+      replace = TRUE
+    )
 
+  result <- sampledCohorts |>
+    dplyr::rename_with(convertToCamelCase) |>
+    tidyr::nest(.by = exposureCohortDefinitionId) |>
+    dplyr::mutate(
+      test = purrr::map(
+        .x = data,
+        .f = \(x) {
+          x |>
+            dplyr::rename("sourceSubjectId" = "subjectId") |>
+            dplyr::arrange(sourceSubjectId) |>
+            dplyr::mutate(subjectId = 1:dplyr::n())
+        }
+      )
+    ) |>
+    dplyr::select(-data) |>
+    tidyr::unnest(cols = test) |>
+    dplyr::arrange(exposureCohortDefinitionId, subjectId, sourceSubjectId) |>
+    dplyr::select(-cohortDefinitionId) |>
+    dplyr::rename("cohortDefinitionId" = "exposureCohortDefinitionId") |>
+    dplyr::relocate(subjectId, .before = sourceSubjectId)
+
+  message("Storing sampled cohorts")
   DatabaseConnector::insertTable(
     connection = connection,
     databaseSchema = resultDatabaseSchema,
     tableName = simulatedCohortTable,
-    data = sampledCohorts,
+    data = result |> dplyr::rename_with(convertToSnakeCase),
     tempTable = FALSE,
     dropTableIfExists = TRUE
   )
-
-  message("Sampled cohorts stored in table sampled_cohorts")
 
   DatabaseConnector::disconnect(connection)
 
@@ -196,6 +583,7 @@ generateNewExposureTable <- function(
          COHORT_DEFINITION_ID          INTEGER,
          OUTCOME_COHORT_DEFINITION_ID INTEGER,
          SUBJECT_ID                    BIGINT,
+         SOURCE_SUBJECT_ID             BIGINT,
          COHORT_START_DATE             DATE,
          COHORT_END_DATE               DATE
        );
@@ -222,6 +610,7 @@ generateNewExposureTable <- function(
         "cohortDefinitionId",
         "outcomeId",
         "subjectId",
+        "sourceSubjectId",
         "cohortStartDate",
         "time"
       )
@@ -264,6 +653,7 @@ generateNewOutcomeTable <- function(
        CREATE TABLE { resultDatabaseSchema }.{ resultTable } (
          COHORT_DEFINITION_ID          INTEGER,
          SUBJECT_ID                    BIGINT,
+         SOURCE_SUBJECT_ID             BIGINT,
          COHORT_START_DATE             DATE,
          COHORT_END_DATE               DATE
        );
@@ -290,6 +680,7 @@ generateNewOutcomeTable <- function(
       c(
         "outcomeId",
         "subjectId",
+        "sourceSubjectId",
         "cohortStartDate",
         "time"
       )
@@ -424,7 +815,7 @@ cleanupExposureTable <- function(
 
   result <- exposuresDT[
     , .(COHORT_END_DATE = cleanupFunction(COHORT_END_DATE)),
-    by = .(COHORT_DEFINITION_ID, SUBJECT_ID, COHORT_START_DATE)
+    by = .(COHORT_DEFINITION_ID, SUBJECT_ID, SOURCE_SUBJECT_ID, COHORT_START_DATE)
   ]
 
   DatabaseConnector::insertTable(
