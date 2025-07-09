@@ -13,110 +13,13 @@ checkIfUsingSameSettings <- function(
       message(glue::glue("Using different {settingsLabel} for each outcome"))
       return(FALSE)
     } else {
-      stop(glue::glue("Length of {settingsLabel} list does not match number of outcomes"))
+        stop(
+          glue::glue(
+            "Length of {settingsLabel} list does not match number of outcomes"
+          )
+      )
     }
   }
 
-
   stop(glue::glue("{settingsLabel} must be a list or a '{targetClass}' object"))
-}
-
-createOutcomeModelSettings <- function(
-  targetId = 1,
-  outcomeIds,
-  populationSettings,
-  restrictPlpDataSettings,
-  covariateSettings,
-  featureEngineeringSettings,
-  sampleSettings,
-  splitSettings,
-  preprocessSettings,
-  modelSettings,
-  executeSettings,
-  saveDirectory = "./OutcomeModels"
-) {
-
-  message("Generating outcome model settings ...")
-  nOutcomeIds <- length(outcomeIds)
-
-  meta <- list(
-    settings = list(
-      populationSettings,
-      restrictPlpDataSettings,
-      covariateSettings,
-      featureEngineeringSettings,
-      sampleSettings,
-      splitSettings,
-      preprocessSettings,
-      modelSettings,
-      executeSettings
-    ),
-    targetClass = c(
-      "populationSettings",
-      "restrictPlpDataSettings",
-      "covariateSettings",
-      "featureEngineeringSettings",
-      "sampleSettings",
-      "splitSettings",
-      "preprocessSettings",
-      "modelSettings",
-      "executeSettings"
-    ),
-    settingsLabel = c(
-      "population settings",
-      "restrict plp data settings",
-      "covariate settings",
-      "feature engineering settings",
-      "sample settings",
-      "split settings",
-      "pre-process settings",
-      "model settings",
-      "execute settings"
-    )
-  )
-
-  useSameFlags <- purrr::pmap_lgl(
-    .l = meta,
-    .f = checkIfUsingSameSettings,
-    nOutcomeIds = nOutcomeIds
-  )
-
-  names(useSameFlags) <- paste0(
-    "useSame",
-    c(
-      "PopulationSettings",
-      "RestrictPlpDataSettings",
-      "CovariateSettings",
-      "FeatureEngineeringSettings",
-      "SampleSettings",
-      "SplitSettings",
-      "PreprocessSettings",
-      "ModelSettings",
-      "ExecuteSettings"
-    )
-  )
-
-  result <- c(
-    list(
-      targetId = targetId,
-      outcomeIds = outcomeIds,
-      populationSettings = populationSettings,
-      restrictPlpDataSettings = restrictPlpDataSettings,
-      covariateSettings = covariateSettings,
-      featureEngineeringSettings = featureEngineeringSettings,
-      sampleSettings = sampleSettings,
-      splitSettings = splitSettings,
-      preprocessSettings = preprocessSettings,
-      modelSettings = modelSettings,
-      executeSettings = executeSettings
-    ),
-    as.list(useSameFlags),
-    list(saveDirectory = saveDirectory)
-  )
-
-  class(result) <- "outcomeModelSettings"
-  message("Done")
-
-  result
-
 }

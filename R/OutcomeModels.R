@@ -1,215 +1,173 @@
-trainAllModels <- function(
+fitPoissonRegression <- function(
   connectionDetails,
   resultDatabaseSchema,
+  outcomeDatabaseSchema,
+  outcomeTable,
+  outcomeId,
   exposureDatabaseSchema,
   exposureTable,
-  exposureIds,
-  databaseDetails,
-  outcomeModelSettings,
-  censoringModelSettings,
-  censoringTime,
+  covariateData,
+  prior = Cyclops::createPrior(
+    priorType = "laplace",
+    variance = 0.1
+  ),
+  control = Cyclops::createControl(
+    cvType = "auto",
+    maxIterations = 3000,
+    threads = -1
+  ),
   saveDir
 ) {
 
-  message("Start training of all models...")
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection))
 
-  extractCohorts(
-    connectionDetails = connectionDetails,
-    exposureTable = exposureTable,
-    exposureIds = exposureIds,
-    cohortTable = "combined_target",
-    resultDatabaseSchema = resultDatabaseSchema,
-    exposureDatabaseSchema = exposureDatabaseSchema,
-    cdmDatabaseSchema = databaseDetails$cdmDatabaseSchema
+  sql <- glue::glue(
+    "
+    WITH outcomes AS (
+      SELECT *
+      FROM { outcomeDatabaseSchema }.{ outcomeTable }
+      WHERE cohort_definition_id = { outcomeId }
+    )
+    SELECT
+      c.subject_id,
+      COUNT(o.subject_id) outcome_count,
+      DATE_DIFF('day', c.cohort_start_date, c.cohort_end_date) time_at_risk_days
+    FROM {exposureDatabaseSchema}.{exposureTable} AS c
+    LEFT JOIN outcomes AS o
+      ON c.subject_id = o.subject_id
+     AND o.cohort_start_date BETWEEN c.cohort_start_date AND c.cohort_end_date
+    GROUP BY
+      c.subject_id,
+      c.cohort_start_date,
+      c.cohort_end_date
+    "
   )
 
-  outcomeModelSaveDir <- file.path(saveDir, "outcomes")
 
-  message("Training outcome models...")
-  trainModels(
-    modelSettings = outcomeModelSettings,
-    databaseDetails = databaseDetails,
-    saveDirectory = outcomeModelSaveDir
+  analysisData <- DatabaseConnector::querySql(connection, sql) |>
+    dplyr::rename_with(convertToCamelCase)
+
+  rowIds <- covariateData$covariates |>
+    dplyr::collect() |>
+    dplyr::pull(rowId) |>
+    unique()
+
+  outcomes <- dplyr::tibble(rowId = rowIds) |>
+    dplyr::left_join(analysisData, by = c("rowId" = "subjectId")) |>
+    dplyr::transmute(rowId, y = outcomeCount, time = timeAtRiskDays) |>
+    dplyr::filter(time > 0)
+
+  cyclopsData <- Cyclops::convertToCyclopsData(
+    outcomes = outcomes,
+    covariates = covariateData$covariates |> dplyr::collect(),
+    modelType = "pr",
+    addIntercept = TRUE
   )
 
-
-  message("Training censoring models...")
-
-  generateCensoringTable(
-    connectionDetails = connectionDetails,
-    censoringTime = censoringTime,
-    exposureDatabaseSchema = exposureDatabaseSchema,
-    exposureTable = "combined_target",
-    outcomeDatabaseSchema = databaseDetails$outcomeDatabaseSchema,
-    outcomeTable = databaseDetails$outcomeTable,
-    outcomeIds = outcomeModelSettings$outcomeIds,
-    resultDatabaseSchema = resultDatabaseSchema,
-    resultTable = "combined_censoring"
+  fit <- Cyclops::fitCyclopsModel(
+    cyclopsData = cyclopsData,
+    prior = prior,
+    control = control,
+    warnings = FALSE
   )
 
-  censoringModelSaveDir <- file.path(saveDir, "censoring")
-  trainModels(
-    modelSettings = censoringModelSettings,
-    databaseDetails = censoringDatabaseDetails,
-    saveDirectory = censoringModelSaveDir
-  )
+  filePath <- file.path(saveDir, glue::glue("outcome_{ outcomeId }"))
+  if (!dir.exists(filePath)) dir.create(filePath, recursive = TRUE)
+  saveRDS(fit, file.path(filePath, "model.rds"))
 
-  message("Checking outcome model status...")
-  outcomeSettings <- checkEventModels(outcomeModelSaveDir) |>
-    dplyr::mutate(model = "outcome")
-
-  message("Checking censoring model status...")
-  censoringSettings <- checkEventModels(censoringModelSaveDir) |>
-    dplyr::mutate(model = "censoring")
-
-  outcomeSettings |>
-    dplyr::bind_rows(censoringSettings) |>
-    dplyr::relocate("model") |>
-    readr::write_csv(file.path(saveDir, "overview.csv"))
-
-  message("Finished training models")
-
+  fit
 }
 
-
-trainModels <- function(
-  modelSettings,
-  databaseDetails,
-  logSettings = PatientLevelPrediction::createLogSettings(),
-  saveDirectory = "./OutcomeModels"
+trainPoissonModels <- function(
+  connectionDetails,
+  cdmDatabaseSchema,
+  exposureDatabaseSchema,
+  exposureTable,
+  outcomeDatabaseSchema,
+  outcomeTable,
+  outcomeIds,
+  resultDatabaseSchema,
+  covariateSettings,
+  saveDir,
+  ...
 ) {
 
-  outcomeIds <- modelSettings$outcomeIds
-
-  modelDesignList <- outcomeIds |>
-    purrr::map(
-      ~ list(
-        targetId = modelSettings$targetId,
-        outcomeId = .x
-      )
-    ) |>
-    purrr::set_names(paste0("outcomeId_", outcomeIds))
-
-  components <- list(
-    executeSettings = list(
-      flag = modelSettings$useSameExecuteSettings,
-      value = modelSettings$executeSettings
-    ),
-    modelSettings = list(
-      flag = modelSettings$useSameModelSettings,
-      value = modelSettings$modelSettings
-    ),
-    splitSettings = list(
-      flag = modelSettings$useSameSplitSettings,
-      value = modelSettings$splitSettings
-    ),
-    sampleSettings = list(
-      flag = modelSettings$useSameSampleSettings,
-      value = modelSettings$sampleSettings
-    ),
-    covariateSettings = list(
-      flag = modelSettings$useSameCovariateSettings,
-      value = modelSettings$covariateSettings
-    ),
-    populationSettings = list(
-      flag = modelSettings$useSamePopulationSettings,
-      value = modelSettings$populationSettings
-    ),
-    preprocessSettings = list(
-      flag = modelSettings$useSamePreprocessSettings,
-      value = modelSettings$preprocessSettings
-    ),
-    restrictPlpDataSettings = list(
-      flag = modelSettings$useSameRestrictPlpDataSettings,
-      value = modelSettings$restrictPlpDataSettings
-    ),
-    featureEngineeringSettings = list(
-      flag = modelSettings$useSameFeatureEngineeringSettings,
-      value = modelSettings$featureEngineeringSettings
+  for (i in seq_along(outcomeIds)) {
+    createDirIfNotExists(
+      dir = file.path(saveDir, glue::glue("outcome_{ outcomeIds[i] }"))
     )
-  )
-
-  modelDesignList <- purrr::reduce(
-    names(components),
-    .init = modelDesignList,
-    .f = function(s, n) {
-      addSettings(
-        settings = s,
-        flagSame = components[[n]]$flag,
-        settingsName = n,
-        settingsValue = components[[n]]$value
-      )
-    }
-  )
-
-  PatientLevelPrediction::runMultiplePlp(
-    databaseDetails = databaseDetails,
-    modelDesignList = modelDesignList,
-    onlyFetchData = FALSE,
-    logSettings = logSettings,
-    saveDirectory = saveDirectory
-  )
-
-}
-
-
-checkEventModels <- function(directory) {
-
-  .check <- function(directory) {
-    checkDir <- file.path(directory, "plpResult")
-    if (dir.exists(checkDir)) {
-      model <- PatientLevelPrediction::loadPlpModel(
-        file.path(checkDir, "model")
-      )
-      if (model$model$modelStatus != "OK") {
-        FALSE
-      } else {
-        TRUE
-      }
-    } else {
-      FALSE
-    }
   }
 
-  directory <- gsub("/+$", "", directory)
-
-  settings <- readr::read_csv(
-    file.path(directory, "settings.csv"),
-    show_col_types = FALSE
+  sameCovariateSettings <- checkIfUsingSameSettings(
+    settings = covariateSettings,
+    targetClass = "covariateSettings",
+    nOutcomeIds = length(outcomeIds),
+    settingsLabel = "covariate settings"
   )
 
-  analysisIds <- settings |>
-    dplyr::pull(analysisId)
+  if (sameCovariateSettings) {
 
-  checkDirectories <- glue::glue(
-    "{ directory }/{ analysisIds }"
-  )
-
-  checkResults <- purrr::map_lgl(checkDirectories, .check)
-
-  result <- dplyr::tibble(
-    analysisId = analysisIds,
-    directory = checkDirectories,
-    checkPassed = checkResults
-  ) |>
-    dplyr::mutate(directory = as.character(directory))
-
-  if (any(!result$checkPassed)) {
-    failedAnalysisIds <- result |>
-      dplyr::filter(!checkPassed) |>
-      dplyr::pull(analysisId)
-    message(
-      glue::glue(
-        "Check failed for analyses : {
-           glue::glue_collapse(failedAnalysisIds, sep = ', ')
-         }"
-      )
+    covariateData <- FeatureExtraction::getDbCovariateData(
+      connectionDetails = connectionDetails,
+      cdmDatabaseSchema = cdmDatabaseSchema,
+      cohortTable = exposureTable,
+      cohortDatabaseSchema = exposureDatabaseSchema,
+      covariateSettings = covariateSettings
     )
+
+    Andromeda::saveAndromeda(
+      andromeda = covariateData,
+      fileName = file.path(saveDir, "covariateData")
+    )
+
   } else {
-    message("All models passed check")
+    for (i in seq_along(outcomeIds)) {
+
+      covariateData <- FeatureExtraction::getDbCovariateData(
+        connectionDetails = connectionDetails,
+        cdmDatabaseSchema = cdmDatabaseSchema,
+        cohortTable = exposureTable,
+        cohortDatabaseSchema = exposureDatabaseSchema,
+        covariateSettings = covariateSettings[[i]]
+      )
+
+      Andromeda::saveAndromeda(
+        andromeda = covariateData,
+        fileName = file.path(
+          saveDir,
+          glue::glue("outcome_{ outcomeIds[i] }"),
+          "covariateData"
+        )
+      )
+    }
   }
 
-  settings |>
-    dplyr::left_join(result, by = "analysisId")
+  for (i in seq_along(outcomeIds)) {
+    covariateDataFile <- findFile(
+      "covariateData",
+      dirs = c(
+        file.path(saveDir, glue::glue("outcome_{ outcomeIds[i] }")),
+        saveDir
+      )
+    )
+
+    covariateData <- Andromeda::loadAndromeda(covariateDataFile)
+
+    result <- fitPoissonRegression(
+      connectionDetails = connectionDetails,
+      resultDatabaseSchema = resultDatabaseSchema,
+      outcomeDatabaseSchema = outcomeDatabaseSchema,
+      outcomeTable = outcomeTable,
+      outcomeId = outcomeIds[i],
+      exposureDatabaseSchema = exposureDatabaseSchema,
+      exposureTable = exposureTable,
+      covariateData = covariateData,
+      saveDir = saveDir,
+      ...
+    )
+  }
+
+  message("Finished training poisson models")
 
 }

@@ -19,44 +19,6 @@ addSettings <- function(
 }
 
 
-replaceTargetTableWithExposure <- function(
-  connectionDetails,
-  cohortDatabaseSchema,
-  cohortTable,
-  resultDatabaseSchema,
-  resultTable
-) {
-
-  connection <- DatabaseConnector::connect(connectionDetails)
-  message("Creating new exposure table...")
-  sqlQuery <- glue::glue(
-    "
-    DROP TABLE IF EXISTS { resultDatabaseSchema }.{ resultTable };
-    CREATE TABLE { resultDatabaseSchema }.{ resultTable } AS
-    SELECT
-      exposure_cohort_definition_id AS cohort_definition_id,
-      subject_id,
-      cohort_start_date,
-      cohort_end_date
-    FROM { cohortDatabaseSchema }.{ cohortTable };
-    "
-  )
-
-  DatabaseConnector::executeSql(connection, sqlQuery)
-
-  warning("Dropping combined target table not implemented yet")
-
-  # sqlQuery <- glue::glue(
-  #   "
-  #   DROP TABLE IF EXISTS { cohortDatabaseSchema }.{ cohortTable };
-  #   "
-  # )
-  # DatabaseConnector::executeSql(connection, sqlQuery)
-
-  DatabaseConnector::disconnect(connection)
-
-}
-
 convertToCamelCase <- function(x) {
   vapply(x, function(one) {
     one |>
@@ -79,5 +41,44 @@ convertToSnakeCase <- function(x, capitalize = TRUE) {
       stringr::str_to_upper()
   } else {
     result
+  }
+}
+
+
+createDirIfNotExists <- function(dir) {
+  if (!dir.exists(dir)) {
+    dir.create(dir, recursive = TRUE)
+    message(glue::glue("Created directory { dir }"))
+  }
+}
+
+
+findFile <- function(fileName, dirs) {
+  lookFor <- file.path(dirs, fileName)
+  found <- file.exists(lookFor)
+  lookFor[found][1]
+
+}
+
+
+dropTableIfExists <- function(
+  connectionDetails,
+  resultDatabaseSchema,
+  tableName
+) {
+
+  connection <- suppressMessages(DatabaseConnector::connect(connectionDetails))
+  on.exit(DatabaseConnector::disconnect(connection))
+
+  tableNames <- DatabaseConnector::getTableNames(connection)
+
+  if (tableName %in% tableNames) {
+    DatabaseConnector::executeSql(
+      connection = connection,
+      sql = glue::glue(
+        "DROP TABLE { resultDatabaseSchema }.{ tableName };"
+      )
+    )
+    message("Dropped existing ", tableName)
   }
 }

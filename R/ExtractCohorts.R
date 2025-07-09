@@ -82,3 +82,64 @@ extractCohorts <- function(
   DatabaseConnector::disconnect(connection)
 
 }
+
+generateObservationPeriod <- function(
+  connectionDetails,
+  cdmDatabaseSchema,
+  exposureDatabaseSchema,
+  exposureTable,
+  resultDatabaseSchema,
+  resultTable = "cohort_observation_period",
+  maxObservationPeriod,
+  washoutPeriod
+) {
+
+  dropTableIfExists(
+    connectionDetails = connectionDetails,
+    resultDatabaseSchema = resultDatabaseSchema,
+    tableName = resultTable
+  )
+
+  sqlQuery <- glue::glue(
+    "
+    CREATE TABLE { resultTable } AS
+    SELECT
+      1 AS cohort_definition_id,
+      et.subject_id,
+      GREATEST(
+        et.cohort_start_date - INTERVAL '{maxObservationPeriod} days',
+        op.observation_period_start_date + INTERVAL '{washoutPeriod} days'
+      ) AS cohort_start_date,
+      LEAST(
+        et.cohort_end_date,
+        op.observation_period_end_date
+      ) AS cohort_end_date
+    FROM { exposureTable } AS et
+    JOIN { cdmDatabaseSchema }.observation_period AS op
+      ON et.subject_id = op.person_id
+    WHERE
+      DATE_DIFF(
+        'day',
+        op.observation_period_start_date,
+        et.cohort_start_date
+      ) >= {washoutPeriod}
+    
+      AND GREATEST(
+            et.cohort_start_date - INTERVAL '{maxObservationPeriod} days',
+            op.observation_period_start_date + INTERVAL '{washoutPeriod} days'
+          )
+          <= LEAST(
+               et.cohort_end_date,
+               op.observation_period_end_date
+             )
+    ; 
+    "
+  )
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection))
+
+  DatabaseConnector::executeSql(connection, sqlQuery)
+
+  message("Populated cohort observation period table")
+}
