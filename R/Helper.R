@@ -82,3 +82,53 @@ dropTableIfExists <- function(
     message("Dropped existing ", tableName)
   }
 }
+
+limitTable <- function(
+  connection,
+  andromeda,
+  fromDatabaseSchema,
+  resultDatabaseSchema,
+  subjectIdTable,
+  targetTable,
+  targetTableName
+) {
+
+  if (missing(targetTableName)) targetTableName <- targetTable
+
+  DatabaseConnector::querySqlToAndromeda(
+    connection = connection,
+    sql = glue::glue(
+      "
+      SELECT t.*
+      FROM { fromDatabaseSchema }.{ targetTable } t
+      JOIN { resultDatabaseSchema }.{ subjectIdTable } s
+        ON s.subject_id = t.person_id;
+      "
+    ),
+    andromeda = andromeda,
+    andromedaTableName = targetTableName
+  )
+}
+
+extractTable <- function(
+  connection,
+  andromeda,
+  fromDatabaseSchema,
+  targetTable,
+  targetTableName
+) {
+
+  if (missing(targetTableName)) targetTableName <- targetTable
+
+  DatabaseConnector::querySqlToAndromeda(
+    connection = connection,
+    sql = glue::glue(
+      "
+      SELECT *
+      FROM { fromDatabaseSchema }.{ targetTable };
+      "
+    ),
+    andromeda = andromeda,
+    andromedaTableName = targetTableName
+  )
+}

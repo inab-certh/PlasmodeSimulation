@@ -1,46 +1,35 @@
 runSampleGeneration <- function(
-  connectionDetails,
+  simulationDatabaseDir,
   size,
-  cdmDatabaseSchema,
-  exposureDatabaseSchema,
-  exposureTable,
   exposureIds,
   outcomeIds,
-  resultDatabaseSchema,
-  sampledCohortTable,
-  simulatedOutcomeTable,
-  cohortObservationTable,
   covariateSettings,
   modelDir,
   saveDir
 ) {
 
-  if (missing(simulatedOutcomeTable)) {
-    simulatedOutcomeTable <- "simulated_outcomes"
-  }
+  sampleData <- Andromeda::andromeda()
+  simulationDatabase <- Andromeda::loadAndromeda(simulationDatabaseDir)
 
-  generateSample(
-    connectionDetails = connectionDetails,
+  sampleData$sampled_cohorts <- generateSample(
+    simulationDatabase = simulationDatabase,
     size = size,
-    exposureDatabaseSchema = exposureDatabaseSchema,
-    exposureTable = exposureTable,
-    exposureIds = exposureIds,
-    resultDatabaseSchema = resultDatabaseSchema,
-    simulatedCohortTable = sampledCohortTable
-  )
+    exposureIds = exposureIds
+  ) |>
+    dplyr::rename_with(convertToSnakeCase, capitalize = FALSE)
 
-  covariateData <- getSampledCohortsCovariateData(
-    connectionDetails = connectionDetails,
-    cdmDatabaseSchema = cdmDatabaseSchema,
-    cohortTable = sampledCohortTable,
-    cohortDatabaseSchema = resultDatabaseSchema,
+  limitCdmToSample(simulationDatabase, sampleData)
+
+   covariateData <- getSampledCohortsCovariateData(
+    sampleData = sampleData,
     covariateSettings = covariateSettings
   )
 
-  dropTableIfExists(
-    connectionDetails = connectionDetails,
-    resultDatabaseSchema = resultDatabaseSchema,
-    tableName = simulatedOutcomeTable
+  sampleData$simulated_outcome <- dplyr::tibble(
+    cohort_definition_id = integer(),
+    subject_id = integer(),
+    cohort_start_date = lubridate::as_date(character()),
+    cohort_end_date = lubridate::as_date(character())
   )
 
   for (i in seq_along(outcomeIds)) {
@@ -66,204 +55,74 @@ runSampleGeneration <- function(
 
     eventTimes <- generatePoissonEventTimes(linearPredictor, 200)
 
+
     generateNewOutcomeTable(
-      connectionDetails = connectionDetails,
-      resultDatabaseSchema = resultDatabaseSchema,
-      cohortObservationTable = cohortObservationTable,
-      sampledCohortTable = sampledCohortTable,
-      resultTable = simulatedOutcomeTable,
+      sampleData = sampleData,
       eventTimes = eventTimes,
       outcomeId = outcomeIds[i]
     )
 
   }
 
-  suppressMessages(connection <- DatabaseConnector::connect(connectionDetails))
-  n <- DatabaseConnector::querySql(
-    connection = connection,
-    sql = glue::glue(
-      "
-      SELECT COUNT(*) n FROM { resultDatabaseSchema }.{ sampledCohortTable }
-      "
-    )
-  ) |> dplyr::pull(N)
-
-  message(glue::glue("Simulated population of size {n}"))
-}
-
-getSampledCohortsCovariateData <- function(
-  connectionDetails,
-  cdmDatabaseSchema,
-  cohortTable,
-  cohortIds,
-  cohortDatabaseSchema,
-  covariateSettings
-) {
-
-  connection <- DatabaseConnector::connect(connectionDetails)
-  on.exit(DatabaseConnector::disconnect(connection), add = TRUE)
-
-  if (missing(cohortIds)) {
-
-    sqlQuery1 <- glue::glue(
-      "
-      SELECT DISTINCT
-        cohort_definition_id,
-        source_subject_id subject_id,
-        cohort_start_date,
-        cohort_end_date
-      FROM { cohortDatabaseSchema }.{ cohortTable };
-      "
-    )
-
-    sqlQuery2 <- glue::glue(
-      "
-      SELECT subject_id, source_subject_id
-      FROM { cohortDatabaseSchema }.{ cohortTable };
-      "
-    )
-  } else {
-
-    sqlQuery1 <- glue::glue(
-      "
-      SELECT DISTINCT
-        cohort_definition_id,
-        source_subject_id subject_id,
-        cohort_start_date,
-        cohort_end_date
-      FROM { cohortDatabaseSchema }.{ cohortTable }
-      WHERE cohort_definition_id IN (
-        { glue::glue_collapse(cohortIds, sep = \", \") }
-      );
-      "
-    )
-
-    sqlQuery2 <- glue::glue(
-      "
-      SELECT subject_id, source_subject_id
-      FROM { cohortDatabaseSchema }.{ cohortTable }
-      WHERE cohort_definition_id IN (
-        { glue::glue_collapse(cohortIds, sep = \", \") }
-      );
-      "
-    )
-  }
-
-  distinctPatients <- DatabaseConnector::querySql(connection, sqlQuery1)
-  DatabaseConnector::insertTable(
-    connection = connection,
-    data = distinctPatients,
-    dropTableIfExists = TRUE,
-    createTable = TRUE,
-    tableName = "temp_distinct_patients",
+  Andromeda::saveAndromeda(
+    andromeda = sampleData,
+    fileName = file.path(saveDir, "sampleData.zip")
   )
-
-  covariateData <- FeatureExtraction::getDbCovariateData(
-    connectionDetails = connectionDetails,
-    cdmDatabaseSchema = cdmDatabaseSchema,
-    cohortTable = "temp_distinct_patients",
-    cohortDatabaseSchema = cohortDatabaseSchema,
-    covariateSettings = covariateSettings
-  )
-
-  covariateData$mapSubjectIds <- DatabaseConnector::querySql(
-    connection = connection,
-    sql = sqlQuery2
-  )
-  covariateData$newCovariates <- DBI::dbGetQuery(
-    covariateData,
-    "
-    SELECT
-      m.subject_id rowId,
-      covariateId,
-      covariateValue
-    FROM covariates c
-    JOIN mapSubjectIds m ON c.rowId = m.source_subject_id;
-    "
-  )
-
-  DBI::dbExecute(covariateData, "DROP TABLE covariates;")
-  DBI::dbExecute(
-    covariateData,
-    "
-    ALTER TABLE newCovariates
-    RENAME TO covariates;
-    "
-  )
-
-  DatabaseConnector::dbExecute(connection, "DROP TABLE temp_distinct_patients")
-
-  covariateData
 }
 
 generateSample <- function(
-  connectionDetails,
+  simulationDatabase,
   size,
-  exposureDatabaseSchema,
-  exposureTable,
-  exposureIds,
-  resultDatabaseSchema,
-  simulatedCohortTable = "sampled_cohorts"
+  exposureIds
 ) {
 
-  connection <- DatabaseConnector::connect(connectionDetails)
-
   message("Sampling cohorts...")
-  sqlQuery <- glue::glue(
-    "
-    SELECT DISTINCT(subject_id)
-    FROM { exposureDatabaseSchema }.{ exposureTable }
-    WHERE cohort_definition_id IN (
-      { glue::glue_collapse(exposureIds, sep = \", \") }
-    );
-    "
-  )
 
-  sqlQuery <- glue::glue(
-    "
-     SELECT *
-     FROM { exposureDatabaseSchema }.{ exposureTable }
-     WHERE exposure_cohort_definition_id IN (
-       { glue::glue_collapse(exposureIds, sep = \", \") }
-     )
-    "
-  )
-  sampledCohorts <- DatabaseConnector::querySql(
-    connection = connection,
-    sql = sqlQuery
-  ) |>
+  simulationDatabase$exposure |>
+    dplyr::filter(cohort_definition_id %in% exposureIds) |>
+    dplyr::collect() |>
     dplyr::sample_n(
       size = size,
       replace = TRUE
-    )
-
-  result <- sampledCohorts |>
+    ) |> 
     dplyr::rename_with(convertToCamelCase) |>
     dplyr::rename("sourceSubjectId" = "subjectId") |>
     dplyr::arrange(sourceSubjectId) |>
     dplyr::mutate(subjectId = seq_len(dplyr::n())) |>
     dplyr::arrange(
-      .data$exposureCohortDefinitionId,
+      .data$cohortDefinitionId,
       .data$subjectId,
       .data$sourceSubjectId
     ) |>
-    dplyr::select(-cohortDefinitionId) |>
-    dplyr::rename("cohortDefinitionId" = "exposureCohortDefinitionId") |>
     dplyr::relocate(subjectId, .before = sourceSubjectId)
+}
 
-  message("Storing sampled cohorts")
-  DatabaseConnector::insertTable(
-    connection = connection,
-    databaseSchema = resultDatabaseSchema,
-    tableName = simulatedCohortTable,
-    data = result |> dplyr::rename_with(convertToSnakeCase),
-    tempTable = FALSE,
-    dropTableIfExists = TRUE
+
+
+getSampledCohortsCovariateData <- function(
+  sampleData,
+  covariateSettings
+) {
+
+  connectionDetails <- DatabaseConnector::createDbiConnectionDetails(
+    dbms = "duckdb",
+    drv = duckdb::duckdb(),
+    dbdir = attr(sampleData, "dbname")
   )
 
-  DatabaseConnector::disconnect(connection)
+  covariateData <- FeatureExtraction::getDbCovariateData(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = "main",
+    cohortTable = "sampled_cohorts",
+    cohortDatabaseSchema = "main",
+    covariateSettings = covariateSettings
+  )
 
+  covariateData
 }
+
+
+
 
 # TODO: implement seed
 generatePoissonEventTimes <- function(
@@ -327,53 +186,17 @@ computePoissonLinearPredictor <- function(model, covariateData) {
 }
 
 
+
 generateNewOutcomeTable <- function(
-  connectionDetails,
-  resultDatabaseSchema,
-  cohortObservationTable,
-  sampledCohortTable,
-  resultTable,
+  sampleData,
   eventTimes,
   outcomeId
 ) {
 
-  connection <- DatabaseConnector::connect(connectionDetails)
 
-  tableNames <- DatabaseConnector::getTableNames(connection)
-  if (!resultTable %in% tableNames) {
-    createSql <- glue::glue(
-      "
-       CREATE TABLE { resultDatabaseSchema }.{ resultTable } (
-         COHORT_DEFINITION_ID INTEGER,
-         SUBJECT_ID BIGINT,
-         COHORT_START_DATE DATE,
-         COHORT_END_DATE DATE
-       );
-       "
-    )
-    DatabaseConnector::executeSql(connection, createSql)
-  }
-
-  patients <- DatabaseConnector::querySql(
-    connection,
-    glue::glue(
-      "
-      SELECT
-        s.cohort_definition_id,
-        s.subject_id,
-        s.source_subject_id,
-        c.cohort_start_date AS observation_period_start_date,
-        c.cohort_end_date AS observation_period_end_date,
-        s.cohort_start_date,
-        s.cohort_end_date
-      FROM { resultDatabaseSchema }.{ sampledCohortTable } s
-      JOIN { resultDatabaseSchema }.{ cohortObservationTable } c
-        ON c.subject_id = s.source_subject_id
-      ORDER BY s.cohort_definition_id, s.subject_id
-      "
-    )
-  ) |>
-    dplyr::as_tibble() |>
+  patients <- sampleData$sampled_cohorts |>
+    dplyr::left_join(sampleData$observation_period, by = c("subject_id" = "person_id")) |>
+    dplyr::collect() |>
     dplyr::rename_with(convertToCamelCase) |>
     dplyr::mutate(
       dplyr::across(
@@ -410,16 +233,16 @@ generateNewOutcomeTable <- function(
       cohortDefinitionId = outcomeId
     ) |>
     dplyr::relocate(cohortDefinitionId) |>
-    dplyr::rename_with(convertToSnakeCase)
+    dplyr::rename_with(convertToSnakeCase, capitalize = FALSE) |>
+    dplyr::mutate(
+      dplyr::across(
+        dplyr::ends_with("date"),
+        lubridate::ymd
+      )
+    )
 
-  DatabaseConnector::insertTable(
-    connection = connection,
-    databaseSchema = resultDatabaseSchema,
-    tableName = resultTable,
-    data = result,
-    createTable = FALSE,
-    dropTableIfExists = FALSE
-  )
+  Andromeda::appendToTable(sampleData$simulated_outcome, result)
+
 
   message("Added lines to table with simulated outcomes")
 }

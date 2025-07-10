@@ -45,8 +45,7 @@ extractCohorts <- function(
       DROP TABLE IF EXISTS { resultDatabaseSchema }.{ cohortTable };
       CREATE TABLE { resultDatabaseSchema }.{ cohortTable } AS
       SELECT
-          1 AS cohort_definition_id,
-          cohort_definition_id AS exposure_cohort_definition_id,
+          cohort_definition_id,
           subject_id,
           cohort_start_date,
           cohort_end_date
