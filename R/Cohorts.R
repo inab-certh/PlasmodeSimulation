@@ -82,7 +82,7 @@ extractCohorts <- function(
 
 }
 
-generateObservationPeriod <- function(
+generateCohortObservationPeriod <- function(
   connectionDetails,
   cdmDatabaseSchema,
   exposureDatabaseSchema,
@@ -122,7 +122,6 @@ generateObservationPeriod <- function(
         op.observation_period_start_date,
         et.cohort_start_date
       ) >= {washoutPeriod}
-    
       AND GREATEST(
             et.cohort_start_date - INTERVAL '{maxObservationPeriod} days',
             op.observation_period_start_date + INTERVAL '{washoutPeriod} days'
@@ -141,4 +140,57 @@ generateObservationPeriod <- function(
   DatabaseConnector::executeSql(connection, sqlQuery)
 
   message("Populated cohort observation period table")
+}
+
+generateModelCohort <- function(
+  connectionDetails,
+  cdmDatabaseSchema,
+  resultDatabaseSchema,
+  resultTable,
+  washoutPeriod,
+  maxObservationPeriod
+) {
+
+  message("Generating model cohorts...")
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection))
+
+  if (missing(maxObservationPeriod)) {
+    maxObservationPeriod <- 1e5
+  }
+
+  targetDialect <- connectionDetails$dbms
+
+  sql <- glue::glue(
+    "
+    CREATE TABLE {resultDatabaseSchema}.{resultTable} AS
+    SELECT
+      1 AS cohort_definition_id,
+      person_id AS subject_id,
+      DATEADD(day, {washoutPeriod}, observation_period_start_date) AS cohort_start_date,
+      LEAST(
+        DATEADD(day, {washoutPeriod} + {maxObservationPeriod}, observation_period_start_date),
+        observation_period_end_date
+      ) AS cohort_end_date
+    FROM {cdmDatabaseSchema}.observation_period
+    WHERE DATEADD(day, {washoutPeriod}, observation_period_start_date) <= observation_period_end_date;
+    "
+  )
+
+  # Translate the SQL to the target dialect
+  translatedSql <- SqlRender::translate(
+    sql = sql,
+    targetDialect = targetDialect
+  )
+
+  dropTableIfExists(
+    connectionDetails = connectionDetails,
+    resultDatabaseSchema = resultDatabaseSchema,
+    tableName = resultTable
+  )
+
+  DatabaseConnector::executeSql(connection, translatedSql)
+
+  message("Done")
 }
