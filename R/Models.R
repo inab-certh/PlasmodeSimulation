@@ -76,9 +76,6 @@ trainPoissonModels <- function(
   ...
 ) {
 
-  old_plan <- future::plan()
-  on.exit(future::plan(old_plan), add = TRUE)
-
   for (outcomeId in outcomeIds) {
     createDirIfNotExists(
       dir = file.path(saveDir, glue::glue("outcome_{ outcomeId }"))
@@ -135,7 +132,7 @@ trainPoissonModels <- function(
     saveDir = saveDir
   )
 
-  processOutcome <- function(outcomeId) {
+  processOutcome <- function(outcomeId, saveDir, ...) {
     covFile <- findFile(
       "covariateData",
       dirs = c(
@@ -154,18 +151,17 @@ trainPoissonModels <- function(
     )
   }
 
-  if (workers > 1) {
-    future::plan(future::multisession, workers = workers)
-  } else {
-    future::plan(future::sequential)
-  }
-
-  furrr::future_walk(
-    outcomeIds,
-    processOutcome,
-    .progress = TRUE,
-    .options = furrr::furrr_options(seed = TRUE)
-  )
+  outcomeIds |>
+    purrr::walk(
+      purrr::in_parallel(
+        \(x) {
+          library(PlasmodeSimulation)
+          processOutcome(x, saveDir)
+        },
+        processOutcome = processOutcome,
+        saveDir = "models"
+      )
+    )
 
   message("Generating overview...")
 

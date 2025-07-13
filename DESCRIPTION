@@ -14,12 +14,14 @@ Imports:
     DatabaseConnector,
     duckdb,
     glue,
+    mirai,
     PatientLevelPrediction (>= 6.4.1),
     polspline,
-    purrr,
+    purrr (>= 1.1.0),
     roxygen2,
     withr
 Suggests:
+    carrier,
     devtools,
     ResultModelManager (>= 0.5.11),
     usethis
