@@ -11,6 +11,7 @@ RoxygenNote: 7.3.2
 Depends:
   data.table
 Imports: 
+    carrier,
     DatabaseConnector,
     duckdb,
     glue,
@@ -21,7 +22,6 @@ Imports:
     roxygen2,
     withr
 Suggests:
-    carrier,
     devtools,
     ResultModelManager (>= 0.5.11),
     usethis

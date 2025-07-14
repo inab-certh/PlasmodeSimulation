@@ -8,6 +8,10 @@ runSampleGeneration <- function(
   saveDir
 ) {
 
+  overview <- readr::read_csv(
+    file.path(modelDir, "overview.csv"),
+    show_col_types = FALSE
+  )
   sampleData <- Andromeda::andromeda()
   simulationDatabase <- Andromeda::loadAndromeda(simulationDatabaseDir)
 
@@ -40,21 +44,42 @@ runSampleGeneration <- function(
       )
     )
 
-    thisModel <- readRDS(
-      file.path(
-        modelDir,
-        glue::glue("outcome_{ outcomeIds[i] }"),
-        "model.rds"
-      )
-    )
+    thisModel <- overview |>
+      dplyr::filter(.data$outcomeId == !!outcomeIds[i]) |>
+      dplyr::pull(.data$location) |>
+      readr::read_csv(show_col_types = FALSE)
 
-    linearPredictor <- computePoissonLinearPredictor(
-      model = thisModel,
-      covariateData = covariateData
-    )
+    linearPredictor <- thisModel |>
+      dplyr::group_by(exposureId) |>
+      tidyr::nest() |>
+      dplyr::mutate(
+        linearPredictor = purrr::map(
+          .x = data,
+          .f = \(x) {
+            computePoissonLinearPredictor(x, covariateData)
+          }
+        )
+      ) |>
+      dplyr::select(-data) |>
+      tidyr::unnest(linearPredictor) |>
+      dplyr::ungroup(exposureId)
 
-    eventTimes <- generatePoissonEventTimes(linearPredictor, 200)
 
+
+    eventTimes <- linearPredictor |>
+      dplyr::group_by(exposureId) |>
+      tidyr::nest() |>
+      dplyr::mutate(
+        eventTimes = purrr::map(
+          .x = data,
+          .f = \(x) {
+            generatePoissonEventTimes(x, 200)
+          }
+        )
+      ) |>
+      dplyr::select(-data) |>
+      tidyr::unnest(eventTimes) |>
+      dplyr::ungroup(exposureId)
 
     generateNewOutcomeTable(
       sampleData = sampleData,
@@ -156,7 +181,7 @@ generatePoissonEventTimes <- function(
 
 computePoissonLinearPredictor <- function(model, covariateData) {
 
-  intercept <- model$estimation |>
+  intercept <- model |>
     dplyr::filter(column_label == 0) |>
     dplyr::pull(estimate)
 
@@ -165,7 +190,7 @@ computePoissonLinearPredictor <- function(model, covariateData) {
   covs_dt <- data.table::as.data.table(
     covariateData$covariates |> dplyr::collect()
   )
-  dtCoef <- data.table::as.data.table(model$estimation)
+  dtCoef <- data.table::as.data.table(model)
   nonZeroCoef <- dtCoef[dtCoef$estimate != 0, ]
 
   resDT <- covs_dt[
@@ -195,7 +220,10 @@ generateNewOutcomeTable <- function(
 
 
   patients <- sampleData$sampled_cohorts |>
-    dplyr::left_join(sampleData$observation_period, by = c("subject_id" = "person_id")) |>
+    dplyr::left_join(
+      sampleData$observation_period,
+      by = c("subject_id" = "person_id")
+    ) |>
     dplyr::collect() |>
     dplyr::rename_with(convertToCamelCase) |>
     dplyr::mutate(
@@ -210,18 +238,26 @@ generateNewOutcomeTable <- function(
       patients |>
         dplyr::select(
           "subjectId",
+          "cohortDefinitionId",
+          "cohortStartDate",
+          "cohortEndDate",
           "observationPeriodStartDate",
           "observationPeriodEndDate"
         ),
       by = c("rowId" = "subjectId")
     ) |>
+    dplyr::filter(exposureId == -1 | exposureId == cohortDefinitionId) |>
     dplyr::mutate(
-      eventDate = observationPeriodStartDate + lubridate::days(eventTimes)
+      eventDate = as.Date(
+        ifelse(
+          exposureId == -1,
+          observationPeriodStartDate + lubridate::days(eventTimes),
+          cohortStartDate + lubridate::days(eventTimes)
+        )
+      )
     ) |>
-    dplyr::filter(
-      eventDate < observationPeriodEndDate
-    ) |>
-    dplyr::select("rowId", "eventDate") |>
+    dplyr::filter(eventDate <= observationPeriodEndDate) |>
+    dplyr::select(-cohortStartDate) |>
     dplyr::rename(
       c(
         "subjectId" = "rowId",
@@ -232,7 +268,14 @@ generateNewOutcomeTable <- function(
       cohortEndDate = cohortStartDate,
       cohortDefinitionId = outcomeId
     ) |>
-    dplyr::relocate(cohortDefinitionId) |>
+    dplyr::select(
+      c(
+        "cohortDefinitionId",
+        "subjectId",
+        "cohortStartDate",
+        "cohortEndDate"
+      )
+    ) |>
     dplyr::rename_with(convertToSnakeCase, capitalize = FALSE) |>
     dplyr::mutate(
       dplyr::across(

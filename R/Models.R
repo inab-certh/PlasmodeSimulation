@@ -50,10 +50,19 @@ fitPoissonRegression <- function(
   if (!dir.exists(filePath)) dir.create(filePath, recursive = TRUE)
   saveRDS(fit, file.path(filePath, "model.rds"))
 
+  model <- fit$estimation |>
+    dplyr::filter(.data$estimate != 0) |>
+    dplyr::mutate(exposureId = -1)
+
+  readr::write_csv(model, file.path(filePath, "model.csv"))
+
+  message(glue::glue("Mode saved in { file.path(filePath, 'model.csv') }"))
+
   modelOverview <- dplyr::tibble(
     outcomeId = outcomeId,
-    location = file.path(filePath, "model.rds"),
-    return = stringr::str_to_lower(fit$return_flag)
+    location = file.path(filePath, "model.csv"),
+    return = stringr::str_to_lower(fit$return_flag),
+    base = -1
   )
 
   readr::write_csv(modelOverview, file.path(filePath, "modelOverview.csv"))
@@ -72,7 +81,6 @@ trainPoissonModels <- function(
   resultDatabaseSchema,
   covariateSettings,
   saveDir,
-  workers = 1,
   ...
 ) {
 
@@ -238,4 +246,92 @@ extractAnalysisData <- function(
 
   saveFile <- file.path(saveDir, "analysisData.csv")
   readr::write_csv(analysisData, saveFile)
+}
+
+
+modifyExistingModel <- function(
+  modelDir,
+  outcomeId,
+  exposureIds,
+  newBetas
+) {
+
+  message("Modifying model ...")
+  overview <- readr::read_csv(
+    file.path(modelDir, "overview.csv"),
+    show_col_types = FALSE
+  )
+
+  modelReturn <- overview |>
+    dplyr::filter(outcomeId == !!outcomeId) |>
+    dplyr::pull(return)
+
+  if (modelReturn == "success") {
+    model <- readr::read_csv(
+      file.path(
+        modelDir,
+        glue::glue("outcome_{ outcomeId }"),
+        "model.csv"
+      ),
+      show_col_types = FALSE
+    )
+
+
+    newModel <- seq_along(exposureIds) |>
+      purrr::map_dfr(
+        .f = \(x) {
+          newBetas[[x]] |>
+            dplyr::rename("newEstimate" = "estimate") |>
+            dplyr::right_join(model, by = "column_label") |>
+            dplyr::mutate(
+              estimate = ifelse(
+                is.na(.data$newEstimate),
+                .data$estimate,
+                .data$newEstimate
+              )
+            ) |>
+            dplyr::select("column_label", "estimate") |>
+            dplyr::mutate(exposureId = exposureIds[x]) |>
+            dplyr::filter(.data$estimate != 0)
+        }
+      )
+
+  } else {
+    stop(
+      glue::glue(
+        "Model for outcome { outcomeId } had return value { modelReturn }"
+      )
+    )
+  }
+
+  result <- model |>
+    dplyr::bind_rows(newModel)
+
+  maxOutcomeId <- overview |>
+    dplyr::pull(outcomeId) |>
+    max()
+
+  saveDir <- file.path(
+    modelDir,
+    glue::glue("outcome_{ maxOutcomeId + 1 }")
+  )
+
+  createDirIfNotExists(saveDir)
+
+  readr::write_csv(result, file.path(saveDir, "model.csv"))
+
+  message(glue::glue("New model saved in { file.path(saveDir, 'model.csv') }"))
+
+  addToOverview <- dplyr::tibble(
+    outcomeId = maxOutcomeId + 1,
+    location = file.path(saveDir, "model.csv"),
+    return = "modified"
+  )
+
+  overview |>
+    dplyr::bind_rows(addToOverview) |>
+    dplyr::arrange(outcomeId) |>
+    readr::write_csv(file.path(modelDir, "overview.csv"))
+
+  message("Updated overview")
 }
