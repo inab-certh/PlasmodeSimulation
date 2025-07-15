@@ -11,19 +11,23 @@ RoxygenNote: 7.3.2
 Depends:
   data.table
 Imports: 
-    carrier,
+    Andromeda,
+    Cyclops,
     DatabaseConnector,
+    dplyr,
     duckdb,
+    FeatureExtraction,
     glue,
-    mirai,
-    PatientLevelPrediction (>= 6.4.1),
-    polspline,
+    lubridate,
     purrr (>= 1.1.0),
-    roxygen2,
+    readr,
+    SqlRender,
+    stringr,
+    tidyr,
     withr
 Suggests:
     devtools,
-    ResultModelManager (>= 0.5.11),
-    usethis
-Remotes: 
-    ohdsi
+    usethis,
+    roxygen2,
+    carrier,
+    mirai
