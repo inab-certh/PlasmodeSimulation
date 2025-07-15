@@ -230,15 +230,13 @@ trainPoissonModels <- function(
 }
 
 extractAnalysisData <- function(
-  connectionDetails,
-  outcomeDatabaseSchema,
-  outcomeTable,
-  outcomeId,
-  exposureDatabaseSchema,
-  exposureTable,
-  saveDir
-) {
-
+    connectionDetails,
+    outcomeDatabaseSchema,
+    outcomeTable,
+    outcomeId,
+    exposureDatabaseSchema,
+    exposureTable,
+    saveDir) {
   saveDir <- file.path(
     saveDir,
     glue::glue("outcome_{ outcomeId }")
@@ -279,6 +277,24 @@ extractAnalysisData <- function(
 }
 
 
+
+#' Modify existing model
+#'
+#' @description Modify an existing model by updating its coefficients
+#'
+#' @param modelDir The directory where all the outcome models are stored.
+#' @param outcomeId The outcome id of the predicted by the model being modified
+#' @param exposureIds The exposure ids for which the model will be modified. If
+#'     set to -1, all exposures will be affected the same. Consequently, no
+#'     effect modification will be present.
+#' @param newBetas A list of data frames with columns \code{column_label} and
+#'     \code{estimate}. Column \code{column_label} contains the covariate id for
+#'     which the coefficient will be replaced by column \code{estimate}. Should
+#'     be the same length as \code{exposureIds}, unless \code{exposureIds} is
+#'     -1.
+#'
+#'
+#' @export
 modifyExistingModel <- function(
   modelDir,
   outcomeId,
@@ -294,7 +310,7 @@ modifyExistingModel <- function(
 
   modelReturn <- overview |>
     dplyr::filter(outcomeId == !!outcomeId) |>
-    dplyr::pull(return)
+    dplyr::pull(.data$return)
 
   if (modelReturn == "success") {
     model <- readr::read_csv(
