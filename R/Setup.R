@@ -1,3 +1,25 @@
+#' Limit a cdm database to a cohort
+#'
+#' @description Creates a self-contained cdm database based only in the patients
+#'     included in a cohort.
+#'
+#' @param connectionDetails The connection details to the database. Should be an
+#'     object of type \code{\link[DatabaseConnector]{createConnectionDetails}}.
+#' @param cdmDatabaseSchema The database schema where the cdm database is
+#'     stored.
+#' @param exposureDatabaseSchema The database schema where table with the
+#'     exposure cohorts are stored.
+#' @param exposureTable The table where the exposure cohorts are stored.
+#' @param outcomeDatabaseSchema The database schema where the table with the
+#'     outcome cohorts is stored.
+#' @param outcomeTable The table with the outcome cohorts.
+#' @param resultDatabaseSchema The database schema where the table with the
+#'     combined cohorts will be stored. Needs write permission.
+#' @param cohortObservationPeriodTable The table with the new observation
+#'     periods.
+#' @param saveDir The directory where the limited cdm database will be stored.
+#'
+#' @export
 limitCdmToCohort <- function(
   connectionDetails,
   cdmDatabaseSchema,
@@ -53,7 +75,8 @@ limitCdmToCohort <- function(
     andromeda = result,
     fromDatabaseSchema = cdmDatabaseSchema,
     resultDatabaseSchema = resultDatabaseSchema,
-    subjectIdTable = "temp_subject_ids"
+    subjectIdTable = "temp_subject_ids",
+    .progress = TRUE
   )
 
   message("Transferring tables...")
@@ -71,6 +94,7 @@ limitCdmToCohort <- function(
     connection = connection,
     andromeda = result,
     fromDatabaseSchema = cdmDatabaseSchema,
+    .progress = TRUE
   )
 
   DatabaseConnector::querySqlToAndromeda(
@@ -143,7 +167,7 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
   }
 
   fromAndromeda$sampled_cohorts <- toAndromeda$sampled_cohorts |>
-    dplyr::select(subject_id, source_subject_id)
+    dplyr::select("subject_id", "source_subject_id")
 
   message("Limiting tables to sample...")
 
@@ -159,7 +183,8 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
     .x = tableNames,
     .f = f1,
     fromAndromeda = fromAndromeda,
-    toAndromeda = toAndromeda
+    toAndromeda = toAndromeda,
+    .progress = TRUE
   )
 
   message("Extracting required tables...")
@@ -173,14 +198,15 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
     .x = tableNames,
     .f = f2,
     fromAndromeda = fromAndromeda,
-    toAndromeda = toAndromeda
+    toAndromeda = toAndromeda,
+    .progress = TRUE
   )
 
   toAndromeda$person <- toAndromeda$person |>
     dplyr::mutate(
-      year_of_birth = as.integer(year_of_birth),
-      month_of_birth = as.integer(month_of_birth),
-      day_of_birth = as.integer(day_of_birth)
+      year_of_birth = as.integer(.data$year_of_birth),
+      month_of_birth = as.integer(.data$month_of_birth),
+      day_of_birth = as.integer(.data$day_of_birth)
     )
 
   toAndromeda$cohort <- fromAndromeda$cohort |>

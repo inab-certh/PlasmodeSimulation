@@ -1,29 +1,26 @@
-createCohortTableIndex <- function(
-  connection,
-  cohortTable,
-  cohortDatabaseSchema
-) {
-
-  message("Indexing cohort table...")
-  sql_query <- glue::glue(
-    "
-    CREATE INDEX IF NOT EXISTS idx_cohort_person_start
-        ON { cohortDatabaseSchema }.{ cohortTable }
-           (subject_id,
-            cohort_start_date,
-            cohort_end_date);
-    "
-  )
-
-  DatabaseConnector::executeSql(
-    connection = connection,
-    sql = sql_query
-  )
-
-  message("Done")
-
-}
-
+#' Extract exposure cohorts
+#'
+#' @description Extract the exposure cohorts from the exposure table. The
+#'     function creates a new table where the combined exposure cohorts will be
+#'     stored.
+#'
+#' @param connectionDetails The connection details to the database. Should be an
+#'     object of type \code{\link[DatabaseConnector]{createConnectionDetails}}.
+#' @param firstExposureOnly If a patient appears in more than one exposure
+#'     cohort, only keep the earliest exposure, censoring at the start of later
+#'     exposure.
+#' @param cdmDatabaseSchema The database schema where the cdm database is
+#'     stored.
+#' @param exposureDatabaseSchema The database schema where table with the
+#'     exposure cohorts are stored.
+#' @param exposureTable The table where the exposure cohorts are stored.
+#' @param exposureIds The cohort definition ids of the exposure cohorts.
+#' @param resultDatabaseSchema The database schema where the table with the
+#'     combined cohorts will be stored. Needs write permission.
+#' @param cohortTable The table where the combined exposure cohorts will be
+#'     stored.
+#'
+#' @export
 extractCohorts <- function(
   connectionDetails,
   firstExposureOnly = TRUE,
@@ -82,6 +79,29 @@ extractCohorts <- function(
 
 }
 
+
+#' Generate cohort observation period
+#'
+#' @description Generates new cohort observation periods for the patients in the
+#'     exposure cohorts. At the moment, the new observation period is created by
+#'     limiting the actual observation period at the end of the exposure for
+#'     each patient.
+#'
+#' @param connectionDetails The connection details to the database. Should be an
+#'     object of type \code{\link[DatabaseConnector]{createConnectionDetails}}.
+#' @param cdmDatabaseSchema The database schema where the cdm database is
+#'     stored.
+#' @param exposureDatabaseSchema The database schema where table with the
+#'     exposure cohorts are stored.
+#' @param exposureTable The table where the exposure cohorts are stored.
+#' @param resultDatabaseSchema The database schema where the table with the new
+#'     observation periods will be stored. Needs write permission.
+#' @param resultTable The table with the new obsrevation periods.
+#' @param maxObservationPeriod The maximum length of the observation period.
+#' @param washoutPeriod The minimum number of days before exposure.
+#'
+#'
+#' @export
 generateCohortObservationPeriod <- function(
   connectionDetails,
   cdmDatabaseSchema,
@@ -142,6 +162,23 @@ generateCohortObservationPeriod <- function(
   message("Populated cohort observation period table")
 }
 
+
+#' Generate model cohorts
+#'
+#' @description Generate the cohort table for the outcome models
+#'
+#' @param connectionDetails An R object of type `connectionDetails`.
+#' @param cdmDatabaseSchema The name of the database schema where the cdm
+#'     database is located.
+#' @param resultDatabaseSchema The name of the schema where the model cohort
+#'     table will be stored. Need to have write priviliedges.
+#' @param resultTable The name of the table that will contain the model cohorts
+#' @param washoutPeriod The mininum required continuous observation time prior
+#'     to index date for a person to be included in the model cohort.
+#' @param maxObservationPeriod The maximum length of the observation period
+#'
+#'
+#' @export
 generateModelCohort <- function(
   connectionDetails,
   cdmDatabaseSchema,
@@ -193,4 +230,30 @@ generateModelCohort <- function(
   DatabaseConnector::executeSql(connection, translatedSql)
 
   message("Done")
+}
+
+createCohortTableIndex <- function(
+  connection,
+  cohortTable,
+  cohortDatabaseSchema
+) {
+
+  message("Indexing cohort table...")
+  sql_query <- glue::glue(
+    "
+    CREATE INDEX IF NOT EXISTS idx_cohort_person_start
+        ON { cohortDatabaseSchema }.{ cohortTable }
+           (subject_id,
+            cohort_start_date,
+            cohort_end_date);
+    "
+  )
+
+  DatabaseConnector::executeSql(
+    connection = connection,
+    sql = sql_query
+  )
+
+  message("Done")
+
 }

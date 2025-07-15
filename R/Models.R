@@ -1,18 +1,16 @@
 fitPoissonRegression <- function(
-  outcomeId,
-  covariateData,
-  saveDir,
-  prior = Cyclops::createPrior(
-    priorType = "laplace",
-    variance = 0.1
-  ),
-  control = Cyclops::createControl(
-    cvType = "auto",
-    maxIterations = 3000,
-    threads = -1
-  )
-) {
-
+    outcomeId,
+    covariateData,
+    saveDir,
+    prior = Cyclops::createPrior(
+      priorType = "laplace",
+      variance = 0.1
+    ),
+    control = Cyclops::createControl(
+      cvType = "auto",
+      maxIterations = 3000,
+      threads = -1
+    )) {
   analysisData <- readr::read_csv(
     file = file.path(
       saveDir,
@@ -51,7 +49,7 @@ fitPoissonRegression <- function(
   saveRDS(fit, file.path(filePath, "model.rds"))
 
   model <- fit$estimation |>
-    dplyr::filter(.data$estimate != 0) |>
+    dplyr::filter(estimate != 0) |>
     dplyr::mutate(exposureId = -1)
 
   readr::write_csv(model, file.path(filePath, "model.csv"))
@@ -70,6 +68,33 @@ fitPoissonRegression <- function(
   fit
 }
 
+utils::globalVariables(
+  c("rowId", "outcomeCount", "timeAtRiskDays", "time", "estimate")
+)
+
+
+#' Train poisson regresion models
+#'
+#' @description Trains poisson regression models
+#'
+#' @param connectionDetails The connection details to the database. Should be an
+#'     object of type \code{\link[DatabaseConnector]{createConnectionDetails}}.
+#' @param cdmDatabaseSchema The database schema where the cdm database is stored.
+#' @param exposureDatabaseSchema The database schema where table with the
+#'     exposure cohorts are stored.
+#' @param exposureTable The table where the exposure cohorts are stored.
+#' @param outcomeDatabaseSchema The database schema where table with the outcome
+#'     cohorts are stored.
+#' @param outcomeTable The table where the outcome cohorts are stored.
+#' @param outcomeIds The cohort definition ids of the outcome cohorts.
+#' @param covariateSettings The covariates that will be used for fitting the
+#'     poisson regression models. An object of type \code{covariateSettings},
+#'     generated with \code{\link[FeatureExtraction]{createCovariateSettings}}.
+#' @param saveDir The directory where the models will be stored
+#' @param ... Additional parameters passed to
+#'     \code{\link[Cyclops]{fitCyclopsModel}}
+#'
+#' @export
 trainPoissonModels <- function(
   connectionDetails,
   cdmDatabaseSchema,
@@ -78,15 +103,17 @@ trainPoissonModels <- function(
   outcomeDatabaseSchema,
   outcomeTable,
   outcomeIds,
-  resultDatabaseSchema,
   covariateSettings,
   saveDir,
   ...
 ) {
 
+  message("Training the outcome models")
   for (outcomeId in outcomeIds) {
-    createDirIfNotExists(
-      dir = file.path(saveDir, glue::glue("outcome_{ outcomeId }"))
+    suppressMessages(
+      createDirIfNotExists(
+        dir = file.path(saveDir, glue::glue("outcome_{ outcomeId }"))
+      )
     )
   }
 
@@ -137,7 +164,8 @@ trainPoissonModels <- function(
     outcomeTable = outcomeTable,
     exposureDatabaseSchema = exposureDatabaseSchema,
     exposureTable = exposureTable,
-    saveDir = saveDir
+    saveDir = saveDir,
+    .progress = TRUE
   )
 
   processOutcome <- function(outcomeId, saveDir, ...) {
@@ -159,6 +187,7 @@ trainPoissonModels <- function(
     )
   }
 
+  message("Fitting poisson regression models...")
   outcomeIds |>
     purrr::walk(
       purrr::in_parallel(
@@ -168,7 +197,8 @@ trainPoissonModels <- function(
         },
         processOutcome = processOutcome,
         saveDir = "models"
-      )
+      ),
+      .progress = TRUE
     )
 
   message("Generating overview...")
@@ -187,11 +217,11 @@ trainPoissonModels <- function(
       .id = "path"
     ) |>
     dplyr::mutate(
-      outcomeId = path |>
+      outcomeId = .data$path |>
         stringr::str_extract("outcome_[^/]+") |>
         stringr::str_remove("^outcome_")
     ) |>
-    dplyr::select(outcomeId, dplyr::everything(), -path)
+    dplyr::select(outcomeId, dplyr::everything(), -"path")
 
   readr::write_csv(combined, "models/overview.csv")
 
@@ -216,7 +246,7 @@ extractAnalysisData <- function(
 
   createDirIfNotExists(saveDir)
 
-  connection <- DatabaseConnector::connect(connectionDetails)
+  connection <- suppressMessages(DatabaseConnector::connect(connectionDetails))
   on.exit(DatabaseConnector::disconnect(connection))
 
   sql <- glue::glue(
@@ -276,7 +306,6 @@ modifyExistingModel <- function(
       show_col_types = FALSE
     )
 
-
     newModel <- seq_along(exposureIds) |>
       purrr::map_dfr(
         .f = \(x) {
@@ -325,7 +354,8 @@ modifyExistingModel <- function(
   addToOverview <- dplyr::tibble(
     outcomeId = maxOutcomeId + 1,
     location = file.path(saveDir, "model.csv"),
-    return = "modified"
+    return = "modified",
+    base = outcomeId
   )
 
   overview |>
