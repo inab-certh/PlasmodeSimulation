@@ -238,8 +238,8 @@ generatePoissonEventTimes <- function(
 computePoissonLinearPredictor <- function(model, covariates) {
 
   intercept <- model |>
-    dplyr::filter(column_label == 0) |>
-    dplyr::pull(estimate)
+    dplyr::filter(.data$column_label == 0) |>
+    dplyr::pull(.data$estimate)
 
   intercept <- ifelse(length(intercept == 1), intercept, 0)
 
@@ -264,15 +264,10 @@ computePoissonLinearPredictor <- function(model, covariates) {
   outDT$linearPredictor[is.na(outDT$linearPredictor)] <- 0
 
   dplyr::as_tibble(outDT) |>
-    dplyr::mutate(linearPredictor = linearPredictor + intercept)
+    dplyr::mutate(linearPredictor = .data$linearPredictor + intercept)
 }
 
-utils::globalVariables(
-  c("column_label", "estimate", "covariateValue", "rowId", "linearPredictor")
-)
 
-
-#' @importFrom dplyr .data
 generateNewOutcomeTable <- function(
   sampledCohorts,
   observationPeriod,

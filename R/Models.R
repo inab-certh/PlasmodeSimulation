@@ -22,13 +22,17 @@ fitPoissonRegression <- function(
 
   rowIds <- covariateData$covariates |>
     dplyr::collect() |>
-    dplyr::pull(rowId) |>
+    dplyr::pull(.data$rowId) |>
     unique()
 
   outcomes <- dplyr::tibble(rowId = rowIds) |>
     dplyr::left_join(analysisData, by = c("rowId" = "subjectId")) |>
-    dplyr::transmute(rowId, y = outcomeCount, time = timeAtRiskDays) |>
-    dplyr::filter(time > 0)
+    dplyr::transmute(
+      .data$rowId,
+      y = .data$outcomeCount,
+      time = .data$timeAtRiskDays
+    ) |>
+    dplyr::filter(.data$time > 0)
 
   cyclopsData <- Cyclops::convertToCyclopsData(
     outcomes = outcomes,
@@ -49,7 +53,7 @@ fitPoissonRegression <- function(
   saveRDS(fit, file.path(filePath, "model.rds"))
 
   model <- fit$estimation |>
-    dplyr::filter(estimate != 0) |>
+    dplyr::filter(.data$estimate != 0) |>
     dplyr::mutate(exposureId = -1)
 
   readr::write_csv(model, file.path(filePath, "model.csv"))
@@ -67,10 +71,6 @@ fitPoissonRegression <- function(
 
   fit
 }
-
-utils::globalVariables(
-  c("rowId", "outcomeCount", "timeAtRiskDays", "time", "estimate")
-)
 
 
 #' Train poisson regresion models
