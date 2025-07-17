@@ -17,6 +17,12 @@
 #'     combined cohorts will be stored. Needs write permission.
 #' @param cohortObservationPeriodTable The table with the new observation
 #'     periods.
+#' @param includeOutcomePatients Whether to include patients in the outcome
+#'   cohorts to the limiting step.
+#' @param limitTableNames The database tables which will be limited to the
+#'     cohorts.
+#' @param transferTableNames The database tables which will be transferred
+#'     unchanged to the new database.
 #' @param saveDir The directory where the limited cdm database will be stored.
 #'
 #' @export
@@ -29,6 +35,9 @@ limitCdmToCohort <- function(
   outcomeTable,
   resultDatabaseSchema,
   cohortObservationPeriodTable,
+  includeOutcomePatients = FALSE,
+  limitTableNames = "all",
+  transferTableNames = "all",
   saveDir
 ) {
 
@@ -37,7 +46,7 @@ limitCdmToCohort <- function(
   connection <- DatabaseConnector::connect(connectionDetails)
   on.exit(DatabaseConnector::disconnect(connection))
 
-  subjectIds <- DatabaseConnector::querySql(
+  exposureSubjectIds <- DatabaseConnector::querySql(
     connection = connection,
     sql = glue::glue(
       "
@@ -48,11 +57,34 @@ limitCdmToCohort <- function(
     )
   )
 
+  if (includeOutcomePatients) {
+    resultSubjectIds <- DatabaseConnector::querySql(
+      connection = connection,
+      sql = glue::glue(
+        "
+      SELECT DISTINCT subject_id
+      FROM { outcomeDatabaseSchema }.{ outcomeTable }
+      ORDER BY subject_id;
+      "
+      )
+    ) |>
+      dplyr::full_join(exposureSubjectIds, by = "SUBJECT_ID")
+
+    DatabaseConnector::dbAppendTable(
+      conn = connection,
+      name = "temp_subject_ids",
+      value = resultSubjectIds,
+      databaseSchema = resultDatabaseSchema
+    )
+  } else {
+    resultSubjectIds <- exposureSubjectIds
+  }
+
   DatabaseConnector::insertTable(
     connection = connection,
     databaseSchema = resultDatabaseSchema,
     tableName = "temp_subject_ids",
-    data = subjectIds,
+    data = resultSubjectIds,
     tempTable = TRUE
   )
 
@@ -60,13 +92,17 @@ limitCdmToCohort <- function(
 
   message("Limiting tables to cohorts...")
 
-  tableNames <- c(
-    "condition_occurrence", "condition_era", "death",
-    "device_exposure", "dose_era", "drug_era", "drug_exposure",
-    "episode", "measurement", "note", "observation",
-    "payer_plan_period", "person", "procedure_occurrence",
-    "visit_detail", "visit_occurrence", "observation_period"
-  )
+  if (limitTableNames[1] == "all") {
+    tableNames <- c(
+      "condition_occurrence", "condition_era", "death",
+      "device_exposure", "dose_era", "drug_era", "drug_exposure",
+      "episode", "measurement", "note", "observation",
+      "payer_plan_period", "person", "procedure_occurrence",
+      "visit_detail", "visit_occurrence", "observation_period"
+    )
+  } else {
+    tableNames <- limitTableNames
+  }
 
   purrr::walk(
     .x = tableNames,
@@ -81,12 +117,16 @@ limitCdmToCohort <- function(
 
   message("Transferring tables...")
 
-  tableNames <- c(
-    "care_site", "cdm_source", "fact_relationship",
-    "location", "note_nlp", "provider", "vocabulary",
-    "concept", "concept_ancestor", "concept_class",
-    "concept_relationship", "concept_synonym"
-  )
+  if (transferTableNames[1] == "all") {
+    tableNames <- c(
+      "care_site", "cdm_source", "fact_relationship",
+      "location", "note_nlp", "provider", "vocabulary",
+      "concept", "concept_ancestor", "concept_class",
+      "concept_relationship", "concept_synonym"
+    )
+  } else {
+    tableNames <- transferTableNames
+  }
 
   purrr::walk(
     .x = tableNames,
@@ -171,13 +211,14 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
 
   message("Limiting tables to sample...")
 
-  tableNames <- c(
+  limitTableNames <- c(
     "condition_occurrence", "condition_era", "death",
     "device_exposure", "dose_era", "drug_era", "drug_exposure",
     "episode", "measurement", "note", "observation", "observation_period",
     "payer_plan_period", "person", "procedure_occurrence",
     "visit_detail", "visit_occurrence"
   )
+  tableNames <- intersect(limitTableNames, names(fromAndromeda))
 
   purrr::walk(
     .x = tableNames,
@@ -188,12 +229,13 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
   )
 
   message("Extracting required tables...")
-  tableNames <- c(
+  transferTableNames <- c(
     "care_site", "cdm_source", "fact_relationship",
     "location", "note_nlp", "provider", "vocabulary",
     "concept", "concept_ancestor", "concept_class",
     "concept_relationship", "concept_synonym"
   )
+  tableNames <- intersect(transferTableNames, names(fromAndromeda))
   purrr::walk(
     .x = tableNames,
     .f = f2,

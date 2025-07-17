@@ -13,6 +13,9 @@ limitCdmToCohort(
   outcomeTable,
   resultDatabaseSchema,
   cohortObservationPeriodTable,
+  includeOutcomePatients = FALSE,
+  limitTableNames = "all",
+  transferTableNames = "all",
   saveDir
 )
 }
@@ -38,6 +41,15 @@ combined cohorts will be stored. Needs write permission.}
 
 \item{cohortObservationPeriodTable}{The table with the new observation
 periods.}
+
+\item{includeOutcomePatients}{Whether to include patients in the outcome
+cohorts to the limiting step.}
+
+\item{limitTableNames}{The database tables which will be limited to the
+cohorts.}
+
+\item{transferTableNames}{The database tables which will be transferred
+unchanged to the new database.}
 
 \item{saveDir}{The directory where the limited cdm database will be stored.}
 }
