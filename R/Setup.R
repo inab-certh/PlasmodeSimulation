@@ -70,12 +70,6 @@ limitCdmToCohort <- function(
     ) |>
       dplyr::full_join(exposureSubjectIds, by = "SUBJECT_ID")
 
-    DatabaseConnector::dbAppendTable(
-      conn = connection,
-      name = "temp_subject_ids",
-      value = resultSubjectIds,
-      databaseSchema = resultDatabaseSchema
-    )
   } else {
     resultSubjectIds <- exposureSubjectIds
   }
@@ -110,8 +104,8 @@ limitCdmToCohort <- function(
     connection = connection,
     andromeda = result,
     fromDatabaseSchema = cdmDatabaseSchema,
+    cohortObservationPeriodTable = cohortObservationPeriodTable,
     resultDatabaseSchema = resultDatabaseSchema,
-    subjectIdTable = "temp_subject_ids",
     .progress = TRUE
   )
 

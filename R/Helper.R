@@ -87,24 +87,24 @@ limitTable <- function(
   connection,
   andromeda,
   fromDatabaseSchema,
+  cohortObservationPeriodTable,
   resultDatabaseSchema,
-  subjectIdTable,
   targetTable,
   targetTableName
 ) {
 
   if (missing(targetTableName)) targetTableName <- targetTable
 
+  sqlQuery  <- writeLimitQueryForTable(
+    fromDatabaseSchema = fromDatabaseSchema,
+    resultDatabaseSchema = resultDatabaseSchema,
+    cohortObservationPeriodTable = cohortObservationPeriodTable,
+    tableName = targetTable
+  )
+
   DatabaseConnector::querySqlToAndromeda(
     connection = connection,
-    sql = glue::glue(
-      "
-      SELECT t.*
-      FROM { fromDatabaseSchema }.{ targetTable } t
-      JOIN { resultDatabaseSchema }.{ subjectIdTable } s
-        ON s.subject_id = t.person_id;
-      "
-    ),
+    sql = sqlQuery,
     andromeda = andromeda,
     andromedaTableName = targetTableName
   )
@@ -131,4 +131,44 @@ extractTable <- function(
     andromeda = andromeda,
     andromedaTableName = targetTableName
   )
+}
+
+writeLimitQueryForTable <- function(
+  fromDatabaseSchema,
+  resultDatabaseSchema,
+  cohortObservationPeriodTable,
+  tableName
+) {
+
+  startDateColumns <- system.file(
+    "csv", "table_start_dates.csv",
+    package = "PlasmodeSimulation"
+  ) |>
+    readr::read_csv(show_col_types = FALSE)
+
+  if (tableName %in% startDateColumns$table) {
+    startDateName <- startDateColumns |>
+      dplyr::filter(table == !!tableName) |>
+      dplyr::pull("start_date")
+
+    result <- glue::glue(
+      "
+      SELECT t.*
+      FROM { fromDatabaseSchema }.{ tableName } t
+      JOIN { resultDatabaseSchema }.{ cohortObservationPeriodTable } c
+        ON c.subject_id = t.person_id
+      WHERE t.{ startDateName } <= c.cohort_end_date;
+      "
+    )
+  } else {
+    result <- glue::glue(
+      "
+      SELECT t.*
+      FROM { fromDatabaseSchema }.{ tableName } t
+      JOIN { resultDatabaseSchema }.{ cohortObservationPeriodTable } c
+        ON c.subject_id = t.person_id;
+      "
+    )
+  }
+
 }
