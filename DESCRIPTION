@@ -1,9 +1,18 @@
 Package: PlasmodeSimulation
-Title: What the Package Does (One Line, Title Case)
+Title: Simulating data mapped to OMOP-CDM
 Version: 0.0.0.9000
 Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+    person("Alexandros", "Rekkas", , "arekkas@certh.gr", role = c("aut", "cre"))
+Description: PlasmodeSimulation is an R-package for creating simulated versions
+  of healthcare databases—mapped to the OMOP Common Data Model—based on predefined
+  cohorts. Unlike conventional approaches that fully generate synthetic
+  patient-level data (demographics, diagnoses, medications, etc.), plasmode
+  simulations reuse real patient records and focus on simulating only the
+  outcomes. Specifically, after fitting outcome models to the observed data, the
+  package generates new outcomes for every patient. Although still in early
+  development, PlasmodeSimulation can already produce benchmark datasets with
+  known positive and negative controls (i.e., treatment–outcome pairs with
+  established effect sizes) to rigorously evaluate pharmacovigilance methods.
 License: Apache License (>= 2)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -23,8 +32,7 @@ Imports:
     readr,
     SqlRender,
     stringr,
-    tidyr,
-    withr
+    tidyr
 Suggests:
     devtools,
     usethis,

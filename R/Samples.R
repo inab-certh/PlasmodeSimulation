@@ -17,7 +17,7 @@
 #' @param saveDir The directory where the simulated database will be stored.
 #'
 #' @export
- runSampleGeneration <- function(
+runSampleGeneration <- function(
   simulationDatabaseDir,
   size,
   exposureIds,
