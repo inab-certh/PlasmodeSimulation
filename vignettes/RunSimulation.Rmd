@@ -1,0 +1,200 @@
+---
+title: "Running a single simulation"
+output: rmarkdown::html_vignette
+toc: true
+vignette: >
+  %\VignetteIndexEntry{Running a single simulation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(PlasmodeSimulation)
+```
+
+# Setup
+
+For this demo we will use data from a synthetic database mapped to OMOP-CDM. We can download the
+database from this
+[link](https://drive.google.com/file/d/1l5wq57fAslnoFR2umFQvVZbDiq5IK0UF/view?usp=sharing).The
+database is a 1-million person sample of SynPUF (Synthetic Public Use Files), converted to the OMOP
+Common Data Model. It is provided in DuckDB format, so it can run locally on your machine using the
+R `duckdb` package.
+
+## Exposure cohorts
+
+As a first step we will need to extract some cohorts of interest. For this example, we will use 4
+exposure cohorts, namely, lisinopril, hydrochlorothiazide, amlodipine, and simvastatin. To extract
+these cohorts from the database we will need to execute the following code. Note that packages
+[DBI](https://cran.r-project.org/web/packages/DBI/index.html) and
+[CohortConstructor](https://cran.r-project.org/web/packages/CohortConstructor/index.html) and [glue](https://cran.r-project.org/web/packages/glue/index.html) will need to be installed first.
+
+```{r exposures, eval=FALSE, message=FALSE, warning=FALSE}
+connection <- DBI::dbConnect(
+  duckdb::duckdb(),
+  dbdir = "database-1M_filtered.duckdb"
+)
+
+cdm <- CDMConnector::cdmFromCon(
+  con = connection,
+  cdmSchema = "main",
+  writeSchema = c(prefix = "demo_", schema = "main")
+)
+
+conceptListExposures <- list(
+  lisinopril = 19080128,
+  hydrochlorothiazide = 19078106,
+  amlodipine = 19073094,
+  simvastatin = 1539463
+)
+
+cdm |>
+  CohortConstructor::conceptCohort(
+    conceptSet = conceptListExposures,
+    exit = "event_end_date",
+    name = "exposures"
+  )
+
+```
+
+
+## Outcome cohorts
+
+Similarly, we can define the outcome cohorts for our analyses. For that, we will use the 40 most
+frequent conditions in the database. To identify the most frequent conditions we can run:
+
+```{r outcomes-1, eval=FALSE, message=FALSE, warning=FALSE}
+
+sql_query <- "
+  SELECT co.condition_concept_id, c.concept_name,
+    COUNT(DISTINCT condition_occurrence_id) n
+  FROM condition_occurrence co
+  JOIN concept c ON co.condition_concept_id = c.concept_id
+  GROUP BY co.condition_concept_id, c.concept_name
+  ORDER BY n DESC
+  LIMIT 40;
+"
+
+outcomes <- DBI::dbGetQuery(connection, sql_query)
+
+```
+
+Then, we can extract the concept cohorts with:
+
+```{r outcomes-2, eval=FALSE, message=FALSE, warning=FALSE}
+
+conceptListOutcomes <- outcomes |>
+  dplyr::transmute(
+    name = paste("outcome", condition_concept_id, sep = "_"),
+    value = condition_concept_id
+)  |>
+  tibble::deframe()  |>
+  as.list()
+  
+  
+cdm |>
+  CohortConstructor::conceptCohort(
+    conceptSet = conceptListOutcomes,
+    exit = "event_start_date",
+    name = "outcomes"
+)
+
+```
+
+After successfully running the previous code snippets, we should have created two new tables in the
+demo database named `demo_exposures` and `demo_outcomes`.
+
+Finally, it's best practice to make sure that we disconnect from the database:
+
+```{r db-disconnect, eval=FALSE, message=FALSE, warning=FALSE}
+DBI::dbDisconnect(connection)
+```
+
+# Running a simulation
+
+## Outcome models
+Now, we can proceed with setting up the simulation study. The first step is to train the outcome
+models that will be later used to generate outcome times for every patient. To do that, we first
+need to decide whether the entire database or only the exposure cohorts will be used for fitting the
+models. In this case, the entire database will be used. We will need to generate a new cohort table
+where the target cohort for the prediction model will be stored. We can do that by running the
+following code:
+
+```{r models-cohort, eval=FALSE, message=FALSE, warning=FALSE}
+
+generateModelCohort(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = "main",
+  resultDatabaseSchema = "main",
+  resultTable = "model_cohort",
+  washoutPeriod = 365,
+  maxObservationPeriod = 15 * 365.25
+)
+
+```
+
+Since the entire database is used, the code above makes sure that for every patient the time at risk
+starts 1 year after their observation period start date and their time at risk is limited at 15
+years.
+
+Then, the outcome models can be fitted using the following code. First, a set of possible features
+to be included in the models needs to be defined using function `createCovariateSettings`. Function
+`trainPoissonModels` actually trains the models using Poisson regression with LASSO
+regularization. The function can be parallelized using package
+[mirai](https://cran.r-project.org/web/packages/mirai/index.html).
+
+```{r models-train, eval=FALSE, message=FALSE, warning=FALSE}
+
+covariateSettings <- FeatureExtraction::createCovariateSettings(
+  useDemographicsGender = TRUE,
+  useDemographicsAgeGroup = TRUE,
+  useConditionOccurrenceAnyTimePrior = TRUE,
+  useMeasurementAnyTimePrior = TRUE
+)
+
+mirai::daemons(4)
+trainPoissonModels(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = "main",
+  exposureDatabaseSchema = "main",
+  exposureTable = "model_cohort",
+  outcomeDatabaseSchema = "main",
+  outcomeTable = "drugon_exposures",
+  outcomeIds = 1:40,
+  covariateSettings = covariateSettings,
+  saveDir = "models"
+)
+mirai::daemons(0)
+
+```
+
+
+## Cohort extraction
+
+Now that we have the outcome models generated for all the outcomes of interest an intermediate step
+of limiting the database to the user-defined cohorts needs to be executed. The purpose of this step
+is to generate a stand-alone OMOP database stored locally that can be queried possibly thousands of
+times over the execution of the simulation study. This limited database can be created using the
+code below:
+
+
+```{r cohort-extraction, eval=FALSE, message=FALSE, warning=FALSE}
+
+extractCohorts(
+  connectionDetails = connectionDetails,
+  exposureTable = "drugon_exposures",
+  exposureIds = 1:4,
+  cohortTable = "combined_target",
+  resultDatabaseSchema = "main",
+  exposureDatabaseSchema = "main",
+  cdmDatabaseSchema = "main"
+)
+
+```

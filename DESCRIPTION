@@ -38,4 +38,7 @@ Suggests:
     usethis,
     roxygen2,
     carrier,
-    mirai
+    mirai,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
