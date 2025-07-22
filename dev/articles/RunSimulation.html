@@ -65,8 +65,7 @@
     
     
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">PlasmodeSimulation</span><span class="op">)</span></span>
-<span><span class="co">#&gt; Loading required package: data.table</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">PlasmodeSimulation</span><span class="op">)</span></span></code></pre></div>
 <div class="section level2">
 <h2 id="setup">Setup<a class="anchor" aria-label="anchor" href="#setup"></a>
 </h2>
@@ -235,6 +234,171 @@ study. This limited database can be created using the code below:</p>
 <span>  exposureDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
 <span>  cdmDatabaseSchema <span class="op">=</span> <span class="st">"main"</span></span>
 <span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level3">
+<h3 id="new-observation-period">New observation period<a class="anchor" aria-label="anchor" href="#new-observation-period"></a>
+</h3>
+<p>We can now generate new observation periods, allowing for two
+sub-periods for every patient. A period before the cohort start date and
+the cohort period (the time between cohort start and cohort end dates).
+The idea here is to keep observation periods simple by enforcing only
+one on-treatment period per patient. In the future more complex
+observation periods will be allowed. The new observation periods can be
+generated using the code below:</p>
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="fu"><a href="../reference/generateCohortObservationPeriod.html">generateCohortObservationPeriod</a></span><span class="op">(</span></span>
+<span>  connectionDetails <span class="op">=</span> <span class="va">connectionDetails</span>,</span>
+<span>  cdmDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  exposureDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  exposureTable <span class="op">=</span> <span class="st">"combined_target"</span>,</span>
+<span>  resultDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  resultTable <span class="op">=</span> <span class="st">"cohort_observation_period"</span>,</span>
+<span>  maxObservationPeriod <span class="op">=</span> <span class="fl">15</span> <span class="op">*</span> <span class="fl">365.25</span>,</span>
+<span>  washoutPeriod <span class="op">=</span> <span class="fl">365</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+<p>The above code instructs <code>PlasmodeSimulation</code> to generate
+for every patient in table <code>combined_target</code> (generated with
+<code>extractCohorts</code>) a new observation period forcing at least
+one year of observation prior to cohort start date, and a maximum of 15
+years of total observation period.</p>
+</div>
+<div class="section level3">
+<h3 id="limit-database-to-cohort">Limit database to cohort<a class="anchor" aria-label="anchor" href="#limit-database-to-cohort"></a>
+</h3>
+<p>The next step in setting up the simulation study is to construct a
+new database limited to the cohorts of interest. The datbase will be
+stored locally as <code>duckDB</code> database and will be queried for
+the generation of the synthetic data of the simulation. Function
+<code>limitCdmToCohort</code> ensures that only records for the patients
+in the cohorts of interest and over the new observation periods are
+saved to increase efficiency. The code below executes the limiting
+process and stores the data to directory <code>results</code>:</p>
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="fu"><a href="../reference/limitCdmToCohort.html">limitCdmToCohort</a></span><span class="op">(</span></span>
+<span>  connectionDetails <span class="op">=</span> <span class="va">connectionDetails</span>,</span>
+<span>  cdmDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  exposureDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  exposureTable <span class="op">=</span> <span class="st">"combined_target"</span>,</span>
+<span>  outcomeDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  outcomeTable <span class="op">=</span> <span class="st">"drugon_outcomes"</span>,</span>
+<span>  resultDatabaseSchema <span class="op">=</span> <span class="st">"main"</span>,</span>
+<span>  cohortObservationPeriodTable <span class="op">=</span> <span class="st">"cohort_observation_period"</span>,</span>
+<span>  includeOutcomePatients <span class="op">=</span> <span class="cn">FALSE</span>,</span>
+<span>  limitTableNames <span class="op">=</span> <span class="st">"all"</span>,</span>
+<span>  transferTableNames <span class="op">=</span> <span class="st">"all"</span>,</span>
+<span>  saveDir <span class="op">=</span> <span class="st">"results"</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level3">
+<h3 id="modifying-models">Modifying models<a class="anchor" aria-label="anchor" href="#modifying-models"></a>
+</h3>
+<p>We can define new outcome models using already trained models using
+function <code>modifyExistingModel</code>. Currently, the new model can
+either:</p>
+<ul>
+<li>Simulate a new negative control outcome, that is, define an outcome
+the event rate of which is the same across the entire observation period
+for every patient.</li>
+<li>Simulate a positive control outcome, that is, define an outcome the
+event rate of which is different when the patient belongs to a certain
+cohort of interest (exposure) compared to when not.</li>
+</ul>
+<p>The way outcome models have been trained so far, all of them
+represent negative controls. Treatment has not been a covariate in any
+of the models. To generate true positive controls based on the model for
+outcome with id 31, we first need to extract the model’s intercept:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a></span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>oldIntercept <span class="ot">&lt;-</span> readr<span class="sc">::</span><span class="fu">read_csv</span>(</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  <span class="st">"models/overview.csv"</span>,</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>  <span class="at">show_col_types =</span> <span class="cn">FALSE</span></span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>) <span class="sc">|&gt;</span></span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">filter</span>(outcomeId <span class="sc">==</span> <span class="dv">31</span>) <span class="sc">|&gt;</span></span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">pull</span>(location) <span class="sc">|&gt;</span></span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>  dplyr<span class="sc">::</span>readr<span class="sc">::</span><span class="fu">read_csv</span>(<span class="at">show_col_types =</span> <span class="cn">FALSE</span>) <span class="sc">|&gt;</span></span>
+<span id="cb11-9"><a href="#cb11-9" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">filter</span>(column_label <span class="sc">==</span> <span class="dv">0</span>) <span class="sc">|&gt;</span></span>
+<span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">pull</span>(estimate)</span>
+<span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a>  </span></code></pre></div>
+<p>Assume we want the new outcome to be a positive control for exposures
+with ids 1 and 2, and a negative control for exposures 11 and 25. Then,
+we can first need to draw to random true rate ratios for outcomes 1 and
+2 as below:</p>
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="va">modification</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="fl">2</span>, <span class="fl">1.05</span>, <span class="fl">1.2</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">newIntercept</span> <span class="op">&lt;-</span> <span class="va">oldIntercept</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="va">modification</span><span class="op">)</span></span></code></pre></div>
+<p>Note that we can use pre-defined rate ratios and not randomly
+generate them. It all depends on the user’s intentions. Now, we can defy
+the new model using the code below:</p>
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="fu"><a href="../reference/modifyExistingModel.html">modifyExistingModel</a></span><span class="op">(</span></span>
+<span>  modelDir <span class="op">=</span> <span class="st">"models"</span>,</span>
+<span>  outcomeId <span class="op">=</span> <span class="fl">31</span>,</span>
+<span>  exposureIds <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span><span class="op">)</span>,</span>
+<span>  newBetas <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
+<span>    <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>column_label <span class="op">=</span> <span class="fl">0</span>, estimate <span class="op">=</span> <span class="va">newIntercept</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span>,</span>
+<span>    <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>column_label <span class="op">=</span> <span class="fl">0</span>, estimate <span class="op">=</span> <span class="va">newIntercept</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span><span class="op">)</span></span>
+<span>  <span class="op">)</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+<p>This code will generate the new model, store it in the directory
+models alongside the rest of the existing models. It will also update
+the <code>overview.csv</code> file inside <code>models</code> directory
+with the information on the new model. One can easily generate
+additional models very easily following the same procedure:</p>
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="fl">32</span><span class="op">:</span><span class="fl">40</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu">purrr</span><span class="fu">::</span><span class="fu"><a href="https://purrr.tidyverse.org/reference/map.html" class="external-link">walk</a></span><span class="op">(</span></span>
+<span>    .f <span class="op">=</span> <span class="fu"><a href="../reference/modifyExistingModel.html">modifyExistingModel</a></span><span class="op">(</span></span>
+<span>      modelDir <span class="op">=</span> <span class="st">"models"</span>,</span>
+<span>      exposureIds <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span><span class="op">)</span>,</span>
+<span>      newBetas <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
+<span>        <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>column_label <span class="op">=</span> <span class="fl">0</span>, estimate <span class="op">=</span> <span class="va">newIntercept</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span>,</span>
+<span>        <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>column_label <span class="op">=</span> <span class="fl">0</span>, estimate <span class="op">=</span> <span class="va">newIntercept</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span><span class="op">)</span></span>
+<span>      <span class="op">)</span></span>
+<span>    <span class="op">)</span>,</span>
+<span>    .progress <span class="op">=</span> <span class="cn">TRUE</span></span>
+<span>  <span class="op">)</span></span></code></pre></div>
+<p>The code above will generate positive controls based on outcome ids
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>32</mn><mo>,</mo><mi>…</mi><mo>,</mo><mn>40</mn></mrow><annotation encoding="application/x-tex">32,\dots, 40</annotation></semantics></math>
+for exposure ids 1 and 2, while for exposure ids 11 and 25 the new
+outcomes will act as negative controls. This process will result in the
+simulation of
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>40</mn><mo>×</mo><mn>4</mn><mo>+</mo><mn>10</mn><mo>×</mo><mn>2</mn><mo>=</mo><mn>180</mn></mrow><annotation encoding="application/x-tex">40\times 4 + 10\times 2 = 180</annotation></semantics></math>
+negative controls and
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>10</mn><mo>×</mo><mn>2</mn><mo>=</mo><mn>20</mn></mrow><annotation encoding="application/x-tex">10\times 2 = 20</annotation></semantics></math>
+positive controls for the genation of a benchmark dataset with 200
+controls.</p>
+</div>
+<div class="section level3">
+<h3 id="simulate-dataset">Simulate dataset<a class="anchor" aria-label="anchor" href="#simulate-dataset"></a>
+</h3>
+<p>We can finally generate a simulated dataset based the real data for
+patients in exposure cohorts 1, 2, 11, and 25 and outcome cohorts
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>1</mn><mo>,</mo><mi>…</mi><mo>,</mo><mn>50</mn></mrow><annotation encoding="application/x-tex">1,\dots, 50</annotation></semantics></math>
+(40 original outcome cohorts and 10 new outcomes) using the following
+code:</p>
+<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="fu"><a href="../reference/runSampleGeneration.html">runSampleGeneration</a></span><span class="op">(</span></span>
+<span>  simulationDatabaseDir <span class="op">=</span> <span class="st">"results/SimulationDatabase.zip"</span>,</span>
+<span>  size <span class="op">=</span> <span class="fl">4e4</span>,</span>
+<span>  exposureIds <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">11</span>,  <span class="fl">25</span><span class="op">)</span>,</span>
+<span>  outcomeIds <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">50</span>,</span>
+<span>  covariateSettings <span class="op">=</span> <span class="va">covariateSettings</span>,</span>
+<span>  modelDir <span class="op">=</span> <span class="st">"models"</span>,</span>
+<span>  saveDir <span class="op">=</span> <span class="st">"results"</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+<p>The above code will use the limited database stored in
+<code>results/SimulationDatabase.zip</code> to generate a simulated
+dataset of size 40,000. The result will be a new small stand-alone OMOP
+database stored on disk inside directory <code>results</code>. Note that
+<code>runSampleGeneration</code> can also take advantage of
+multi-threading, again using the <a href="https://cran.r-project.org/web/packages/mirai/index.html" class="external-link">mirai</a>
+R-package.</p>
 </div>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
