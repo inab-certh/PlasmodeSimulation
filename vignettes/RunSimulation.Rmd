@@ -15,26 +15,24 @@ knitr::opts_chunk$set(
 )
 ```
 
-```{r setup}
+```{r setup, eval=FALSE, message=FALSE, warning=FALSE}
 library(PlasmodeSimulation)
 ```
 
 # Setup
 
-For this demo we will use data from a synthetic database mapped to OMOP-CDM. We can download the
-database from this
-[link](https://drive.google.com/file/d/1l5wq57fAslnoFR2umFQvVZbDiq5IK0UF/view?usp=sharing).The
-database is a 1-million person sample of SynPUF (Synthetic Public Use Files), converted to the OMOP
-Common Data Model. It is provided in DuckDB format, so it can run locally on your machine using the
-R `duckdb` package.
+For this demo we will use data from a synthetic database mapped to OMOP-CDM. We can download the database from this
+[link](https://drive.google.com/file/d/1l5wq57fAslnoFR2umFQvVZbDiq5IK0UF/view?usp=sharing).The database is a 1-million
+person sample of SynPUF (Synthetic Public Use Files), converted to the OMOP Common Data Model. It is provided in DuckDB
+format, so it can run locally on your machine using the R `duckdb` package.
 
 ## Exposure cohorts
 
-As a first step we will need to extract some cohorts of interest. For this example, we will use 4
-exposure cohorts, namely, lisinopril, hydrochlorothiazide, amlodipine, and simvastatin. To extract
-these cohorts from the database we will need to execute the following code. Note that packages
-[DBI](https://cran.r-project.org/web/packages/DBI/index.html) and
-[CohortConstructor](https://cran.r-project.org/web/packages/CohortConstructor/index.html) and [glue](https://cran.r-project.org/web/packages/glue/index.html) will need to be installed first.
+As a first step we will need to extract some cohorts of interest. For this example, we will use 4 exposure cohorts,
+namely, lisinopril, hydrochlorothiazide, amlodipine, and simvastatin. To extract these cohorts from the database we will
+need to execute the following code. Note that packages [DBI](https://cran.r-project.org/web/packages/DBI/index.html) and
+[CohortConstructor](https://cran.r-project.org/web/packages/CohortConstructor/index.html) and
+[glue](https://cran.r-project.org/web/packages/glue/index.html) will need to be installed first.
 
 ```{r exposures, eval=FALSE, message=FALSE, warning=FALSE}
 connection <- DBI::dbConnect(
@@ -108,8 +106,8 @@ cdm |>
 
 ```
 
-After successfully running the previous code snippets, we should have created two new tables in the
-demo database named `demo_exposures` and `demo_outcomes`.
+After successfully running the previous code snippets, we should have created two new tables in the demo database named
+`demo_exposures` and `demo_outcomes`.
 
 Finally, it's best practice to make sure that we disconnect from the database:
 
@@ -120,12 +118,12 @@ DBI::dbDisconnect(connection)
 # Running a simulation
 
 ## Outcome models
-Now, we can proceed with setting up the simulation study. The first step is to train the outcome
-models that will be later used to generate outcome times for every patient. To do that, we first
-need to decide whether the entire database or only the exposure cohorts will be used for fitting the
-models. In this case, the entire database will be used. We will need to generate a new cohort table
-where the target cohort for the prediction model will be stored. We can do that by running the
-following code:
+
+Now, we can proceed with setting up the simulation study. The first step is to train the outcome models that will be
+later used to generate outcome times for every patient. To do that, we first need to decide whether the entire database
+or only the exposure cohorts will be used for fitting the models. In this case, the entire database will be used. We
+will need to generate a new cohort table where the target cohort for the prediction model will be stored. We can do that
+by running the following code:
 
 ```{r models-cohort, eval=FALSE, message=FALSE, warning=FALSE}
 
@@ -140,14 +138,12 @@ generateModelCohort(
 
 ```
 
-Since the entire database is used, the code above makes sure that for every patient the time at risk
-starts 1 year after their observation period start date and their time at risk is limited at 15
-years.
+Since the entire database is used, the code above makes sure that for every patient the time at risk starts 1 year after
+their observation period start date and their time at risk is limited at 15 years.
 
-Then, the outcome models can be fitted using the following code. First, a set of possible features
-to be included in the models needs to be defined using function `createCovariateSettings`. Function
-`trainPoissonModels` actually trains the models using Poisson regression with LASSO
-regularization. The function can be parallelized using package
+Then, the outcome models can be fitted using the following code. First, a set of possible features to be included in the
+models needs to be defined using function `createCovariateSettings`. Function `trainPoissonModels` actually trains the
+models using Poisson regression with LASSO regularization. The function can be parallelized using package
 [mirai](https://cran.r-project.org/web/packages/mirai/index.html).
 
 ```{r models-train, eval=FALSE, message=FALSE, warning=FALSE}
@@ -178,12 +174,10 @@ mirai::daemons(0)
 
 ## Cohort extraction
 
-Now that we have the outcome models generated for all the outcomes of interest an intermediate step
-of limiting the database to the user-defined cohorts needs to be executed. The purpose of this step
-is to generate a stand-alone OMOP database stored locally that can be queried possibly thousands of
-times over the execution of the simulation study. This limited database can be created using the
-code below:
-
+Now that we have the outcome models generated for all the outcomes of interest an intermediate step of limiting the
+database to the user-defined cohorts needs to be executed. The purpose of this step is to generate a stand-alone OMOP
+database stored locally that can be queried possibly thousands of times over the execution of the simulation study. This
+limited database can be created using the code below:
 
 ```{r cohort-extraction, eval=FALSE, message=FALSE, warning=FALSE}
 
@@ -198,3 +192,162 @@ extractCohorts(
 )
 
 ```
+
+## New observation period
+
+We can now generate new observation periods, allowing for two sub-periods for every patient. A period before the cohort
+start date and the cohort period (the time between cohort start and cohort end dates). The idea here is to keep
+observation periods simple by enforcing only one on-treatment period per patient. In the future more complex observation
+periods will be allowed. The new observation periods can be generated using the code below:
+
+```{r cohort-observation-period, eval=FALSE, message=FALSE, warning=FALSE}
+
+generateCohortObservationPeriod(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = "main",
+  exposureDatabaseSchema = "main",
+  exposureTable = "combined_target",
+  resultDatabaseSchema = "main",
+  resultTable = "cohort_observation_period",
+  maxObservationPeriod = 15 * 365.25,
+  washoutPeriod = 365
+)
+
+```
+
+The above code instructs `PlasmodeSimulation` to generate for every patient in table `combined_target` (generated with
+`extractCohorts`) a new observation period forcing at least one year of observation prior to cohort start date, and a
+maximum of 15 years of total observation period.
+
+## Limit database to cohort
+
+The next step in setting up the simulation study is to construct a new database limited to the cohorts of interest. The
+datbase will be stored locally as `duckDB` database and will be queried for the generation of the synthetic data of the
+simulation. Function `limitCdmToCohort` ensures that only records for the patients in the cohorts of interest and over
+the new observation periods are saved to increase efficiency. The code below executes the limiting process and stores
+the data to directory `results`:
+
+```{r limit-cdm-to-cohort, eval=FALSE, message=FALSE, warning=FALSE}
+
+limitCdmToCohort(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = "main",
+  exposureDatabaseSchema = "main",
+  exposureTable = "combined_target",
+  outcomeDatabaseSchema = "main",
+  outcomeTable = "drugon_outcomes",
+  resultDatabaseSchema = "main",
+  cohortObservationPeriodTable = "cohort_observation_period",
+  includeOutcomePatients = FALSE,
+  limitTableNames = "all",
+  transferTableNames = "all",
+  saveDir = "results"
+)
+
+```
+
+## Modifying models
+
+We can define new outcome models using already trained models using function `modifyExistingModel`. Currently, the new
+model can either:
+
+* Simulate a new negative control outcome, that is, define an outcome the event rate of which is the same across the
+  entire observation period for every patient.
+* Simulate a positive control outcome, that is, define an outcome the event rate of which is different when the patient
+  belongs to a certain cohort of interest (exposure) compared to when not.
+  
+The way outcome models have been trained so far, all of them represent negative controls. Treatment has not been a
+covariate in any of the models. To generate true positive controls based on the model for outcome with id 31, we first
+need to extract the model's intercept:
+
+```{r modify-existing-model-positive-control-1, eval=FALSE, message=FALSE, warning=FALSE}
+
+oldIntercept <- readr::read_csv(
+  "models/overview.csv",
+  show_col_types = FALSE
+) |>
+  dplyr::filter(outcomeId == 31) |>
+  dplyr::pull(location) |>
+  dplyr::readr::read_csv(show_col_types = FALSE) |>
+  dplyr::filter(column_label == 0) |>
+  dplyr::pull(estimate)
+  
+```
+
+Assume we want the new outcome to be a positive control for exposures with ids 1 and 2, and a negative control for
+exposures 11 and 25. Then, we can first need to draw to random true rate ratios for outcomes 1 and 2 as below:
+
+```{r modify-existing-model-positive-control-2, eval=FALSE, message=FALSE, warning=FALSE}
+
+modification <- runif(2, 1.05, 1.2)
+
+newIntercept <- oldIntercept + log(modification)
+
+```
+
+Note that we can use pre-defined rate ratios and not randomly generate them. It all depends on the user's
+intentions. Now, we can defy the new model using the code below:
+
+```{r modify-existing-model-positive-control-3, eval=FALSE, message=FALSE, warning=FALSE}
+
+modifyExistingModel(
+  modelDir = "models",
+  outcomeId = 31,
+  exposureIds = c(1, 2),
+  newBetas = list(
+    data.frame(column_label = 0, estimate = newIntercept[1]),
+    data.frame(column_label = 0, estimate = newIntercept[2])
+  )
+)
+
+```
+
+This code will generate the new model, store it in the directory models alongside the rest of the existing models. It
+will also update the `overview.csv` file inside `models` directory with the information on the new model. One can easily
+generate additional models very easily following the same procedure:
+
+```{r modify-existing-model-positive-control-4, eval=FALSE, message=FALSE, warning=FALSE}
+
+32:40 |>
+  purrr::walk(
+    .f = modifyExistingModel(
+      modelDir = "models",
+      exposureIds = c(1, 2),
+      newBetas = list(
+        data.frame(column_label = 0, estimate = newIntercept[1]),
+        data.frame(column_label = 0, estimate = newIntercept[2])
+      )
+    ),
+    .progress = TRUE
+  )
+
+```
+
+The code above will generate positive controls based on outcome ids $32,\dots, 40$ for exposure ids 1 and 2, while for
+exposure ids 11 and 25 the new outcomes will act as negative controls. This process will result in the simulation of
+$40\times 4 + 10\times 2 = 180$ negative controls and $10\times 2 = 20$ positive controls for the genation of a
+benchmark dataset with 200 controls.
+
+## Simulate dataset
+
+We can finally generate a simulated dataset based the real data for patients in exposure cohorts 1, 2, 11, and 25 and
+outcome cohorts $1,\dots, 50$ (40 original outcome cohorts and 10 new outcomes) using the following code: 
+
+```{r run-sample-generation, eval=FALSE, message=FALSE, warning=FALSE}
+
+runSampleGeneration(
+  simulationDatabaseDir = "results/SimulationDatabase.zip",
+  size = 4e4,
+  exposureIds = c(1, 2, 11,  25),
+  outcomeIds = 1:50,
+  covariateSettings = covariateSettings,
+  modelDir = "models",
+  saveDir = "results"
+)
+
+```
+
+The above code will use the limited database stored in `results/SimulationDatabase.zip` to generate a simulated dataset
+of size 40,000. The result will be a new small stand-alone OMOP database stored on disk inside directory `results`. Note
+that `runSampleGeneration` can also take advantage of multi-threading, again using the
+[mirai](https://cran.r-project.org/web/packages/mirai/index.html) R-package.
