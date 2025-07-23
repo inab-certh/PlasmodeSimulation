@@ -275,7 +275,7 @@ oldIntercept <- readr::read_csv(
 ```
 
 Assume we want the new outcome to be a positive control for exposures with ids 1 and 2, and a negative control for
-exposures 11 and 25. Then, we can first need to draw to random true rate ratios for outcomes 1 and 2 as below:
+exposures 3 and 4. Then, we can first need to draw to random true rate ratios for outcomes 1 and 2 as below:
 
 ```{r modify-existing-model-positive-control-2, eval=FALSE, message=FALSE, warning=FALSE}
 
@@ -324,13 +324,13 @@ generate additional models very easily following the same procedure:
 ```
 
 The code above will generate positive controls based on outcome ids $32,\dots, 40$ for exposure ids 1 and 2, while for
-exposure ids 11 and 25 the new outcomes will act as negative controls. This process will result in the simulation of
+exposure ids 3 and 4 the new outcomes will act as negative controls. This process will result in the simulation of
 $40\times 4 + 10\times 2 = 180$ negative controls and $10\times 2 = 20$ positive controls for the genation of a
 benchmark dataset with 200 controls.
 
 ## Simulate dataset
 
-We can finally generate a simulated dataset based the real data for patients in exposure cohorts 1, 2, 11, and 25 and
+We can finally generate a simulated dataset based the real data for patients in exposure cohorts 1, 2, 3, and 4 and
 outcome cohorts $1,\dots, 50$ (40 original outcome cohorts and 10 new outcomes) using the following code: 
 
 ```{r run-sample-generation, eval=FALSE, message=FALSE, warning=FALSE}
@@ -338,7 +338,7 @@ outcome cohorts $1,\dots, 50$ (40 original outcome cohorts and 10 new outcomes) 
 runSampleGeneration(
   simulationDatabaseDir = "results/SimulationDatabase.zip",
   size = 4e4,
-  exposureIds = c(1, 2, 11,  25),
+  exposureIds = 1:4,
   outcomeIds = 1:50,
   covariateSettings = covariateSettings,
   modelDir = "models",
