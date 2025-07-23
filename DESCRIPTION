@@ -1,6 +1,6 @@
 Package: PlasmodeSimulation
 Title: Simulating data mapped to OMOP-CDM
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: 
     person("Alexandros", "Rekkas", , "arekkas@certh.gr", role = c("aut", "cre"))
 Description: PlasmodeSimulation is an R-package for creating simulated versions
