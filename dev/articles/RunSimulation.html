@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">PlasmodeSimulation</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -321,9 +321,9 @@ outcome with id 31, we first need to extract the model’s intercept:</p>
 <span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a>  dplyr<span class="sc">::</span><span class="fu">pull</span>(estimate)</span>
 <span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a>  </span></code></pre></div>
 <p>Assume we want the new outcome to be a positive control for exposures
-with ids 1 and 2, and a negative control for exposures 11 and 25. Then,
-we can first need to draw to random true rate ratios for outcomes 1 and
-2 as below:</p>
+with ids 1 and 2, and a negative control for exposures 3 and 4. Then, we
+can first need to draw to random true rate ratios for outcomes 1 and 2
+as below:</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span></span>
 <span><span class="va">modification</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="fl">2</span>, <span class="fl">1.05</span>, <span class="fl">1.2</span><span class="op">)</span></span>
@@ -364,7 +364,7 @@ additional models very easily following the same procedure:</p>
 <span>  <span class="op">)</span></span></code></pre></div>
 <p>The code above will generate positive controls based on outcome ids
 <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>32</mn><mo>,</mo><mi>…</mi><mo>,</mo><mn>40</mn></mrow><annotation encoding="application/x-tex">32,\dots, 40</annotation></semantics></math>
-for exposure ids 1 and 2, while for exposure ids 11 and 25 the new
+for exposure ids 1 and 2, while for exposure ids 3 and 4 the new
 outcomes will act as negative controls. This process will result in the
 simulation of
 <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>40</mn><mo>×</mo><mn>4</mn><mo>+</mo><mn>10</mn><mo>×</mo><mn>2</mn><mo>=</mo><mn>180</mn></mrow><annotation encoding="application/x-tex">40\times 4 + 10\times 2 = 180</annotation></semantics></math>
@@ -377,7 +377,7 @@ controls.</p>
 <h3 id="simulate-dataset">Simulate dataset<a class="anchor" aria-label="anchor" href="#simulate-dataset"></a>
 </h3>
 <p>We can finally generate a simulated dataset based the real data for
-patients in exposure cohorts 1, 2, 11, and 25 and outcome cohorts
+patients in exposure cohorts 1, 2, 3, and 4 and outcome cohorts
 <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>1</mn><mo>,</mo><mi>…</mi><mo>,</mo><mn>50</mn></mrow><annotation encoding="application/x-tex">1,\dots, 50</annotation></semantics></math>
 (40 original outcome cohorts and 10 new outcomes) using the following
 code:</p>
@@ -386,7 +386,7 @@ code:</p>
 <span><span class="fu"><a href="../reference/runSampleGeneration.html">runSampleGeneration</a></span><span class="op">(</span></span>
 <span>  simulationDatabaseDir <span class="op">=</span> <span class="st">"results/SimulationDatabase.zip"</span>,</span>
 <span>  size <span class="op">=</span> <span class="fl">4e4</span>,</span>
-<span>  exposureIds <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">11</span>,  <span class="fl">25</span><span class="op">)</span>,</span>
+<span>  exposureIds <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">4</span>,</span>
 <span>  outcomeIds <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">50</span>,</span>
 <span>  covariateSettings <span class="op">=</span> <span class="va">covariateSettings</span>,</span>
 <span>  modelDir <span class="op">=</span> <span class="st">"models"</span>,</span>

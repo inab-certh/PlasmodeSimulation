@@ -22,7 +22,7 @@
 
     <a class="navbar-brand me-2" href="index.html">PlasmodeSimulation</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -52,9 +52,30 @@
 </nav><div class="container template-home">
 <div class="row">
   <main id="main" class="col-md-9"><div class="section level1">
-<div class="page-header"><h1 id="plasmodesimulation-under-development">PlasmodeSimulation [Under development]<a class="anchor" aria-label="anchor" href="#plasmodesimulation-under-development"></a>
+<div class="page-header"><h1 id="plasmodesimulation">PlasmodeSimulation<a class="anchor" aria-label="anchor" href="#plasmodesimulation"></a>
 </h1></div>
-<p>R-package for the generation of simulated datasets using observational healthcare databases mapped to OMOP-CDM.</p>
+<div class="section level2">
+<h2 id="introduction">Introduction<a class="anchor" aria-label="anchor" href="#introduction"></a>
+</h2>
+<p><code>PlasmodeSimulation</code> is an R-package for creating simulated versions of healthcare databases—mapped to the OMOP Common Data Model—based on predefined cohorts. Unlike conventional approaches that fully generate synthetic patient-level data (demographics, diagnoses, medications, etc.), plasmode simulations reuse real patient records and focus on simulating only the outcomes. Specifically, after fitting outcome models to the observed data, the package generates new outcomes for every patient. Although still in early development, PlasmodeSimulation can already produce benchmark datasets with known positive and negative controls (i.e., treatment–outcome pairs with established effect sizes) to rigorously evaluate pharmacovigilance methods.</p>
+</div>
+<div class="section level2">
+<h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
+</h2>
+<p>To install the latest version from github run:</p>
+<div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu">remotes</span><span class="fu">::</span><span class="fu"><a href="https://remotes.r-lib.org/reference/install_github.html" class="external-link">install_github</a></span><span class="op">(</span><span class="st">"inab-certh/PlasmodeSimulation"</span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level2">
+<h2 id="development-status">Development status<a class="anchor" aria-label="anchor" href="#development-status"></a>
+</h2>
+<p>The R-package is still in early beta stage. Breaking changes may occur.</p>
+</div>
+<div class="section level2">
+<h2 id="more-information">More information<a class="anchor" aria-label="anchor" href="#more-information"></a>
+</h2>
+<p>For more information consult the package website, containing function documentation and vignettes.</p>
+</div>
 </div>
   </main><aside class="col-md-3"><div class="license">
 <h2 data-toc-skip>License</h2>
