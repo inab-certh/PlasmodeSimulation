@@ -257,3 +257,136 @@ createCohortTableIndex <- function(
   message("Done")
 
 }
+
+generatePriorOutcomes <- function(
+  cdmDatabaseSchema,
+  outcomeDatabaseSchema,
+  outcomeTable,
+  cohortDatabaseSchema,
+  cohortTable,
+  startDays = c(-30, -180, -365, -99999),
+  startDayLabels = c("short", "medium", "long", "any"),
+  ...
+) {
+  
+  if (length(startDays) != length(startDayLabels)) {
+    stop("startDays must have same length as startDayLabels.")
+  }
+
+  analysisId <- 420
+  covariateDataList <- list()
+
+  for (i in seq_along(startDayLabels)) {
+    analysisId <- analysisId + 1
+
+    covariateSettings <- FeatureExtraction::createCohortBasedCovariateSettings(
+      analysisId = analysisId,
+      covariateCohortDatabaseSchema = outcomeDatabaseSchema,
+      covariateCohortTable = outcomeTable,
+      covariateCohorts = data.frame(
+        cohortId = outcomeIds,
+        cohortName = paste0("outcome_", outcomeIds)
+      ),
+      startDay = startDays[i],
+      endDay = 0
+    )
+
+    covariateDataList[[i]] <- FeatureExtraction::getDbCohortBasedCovariatesData(
+      connection = connection,
+      cdmDatabaseSchema = cdmDatabaseSchema,
+      cohortTable = glue::glue("{ cohortDatabaseSchema }.{ cohortTable }"),
+      covariateSettings = covariateSettings
+    )
+  }
+
+  covariateDataListClean <- purrr::map(covariateDataList, function(x) {
+    list(
+      covariates = dplyr::collect(x$covariates),
+      covariateRef = dplyr::collect(x$covariateRef),
+      analysisRef = dplyr::collect(x$analysisRef)
+    )
+  })
+
+  transposed <- transpose(covariateDataListClean)
+
+  mergedData <- purrr::map(transposed, dplyr::bind_rows)
+
+  priorOutcomes <- Andromeda::andromeda()
+  priorOutcomes$covariates <- mergedData[[1]]
+  priorOutcomes$covariateRef <- mergedData[[2]]
+  priorOutcomes$analysisRef <- mergedData[[3]]
+
+  priorOutcomes
+
+}
+
+combineExposureCohorts <- function(
+  connection,
+  connectionDetails,
+  cohortDatabaseSchema,
+  cohortTable,
+  cohortDefinitionIds,
+  ...
+) {
+    if (missing(connection)) {
+    if (missing(connectionDetails)) {
+      stop("Either connection or connectionDetails must be provided.")
+    } else {
+      connection <- DatabaseConnector::connect(connectionDetails)
+      on.exit(DatabaseConnector::disconnect(connection))
+    }
+  }
+
+  if (cohortDefinitionIds == -1) {
+    cohortDefinitionIds <- DatabaseConnector::querySql(
+      connection = connection,
+      sql = glue::glue(
+        "
+        SELECT DISTINCT cohort_definition_id
+        FROM { cohortDatabaseSchema }.{ cohortTable }
+        ;
+        "
+      )
+    ) |>
+      dplyr::rename_with(convertToSnakeCase, capitalize = FALSE) |>
+      dplyr::pull("cohort_definition_id") |>
+      sort()
+  }
+
+  result <- DatabaseConnector::querySql(
+    connection = connection,
+    sql = glue::glue(
+      "
+      WITH cohorts AS (
+        SELECT *
+        FROM { cohortDatabaseSchema }.{ cohortTable }
+        WHERE cohort_definition_id IN (
+          {
+            glue::glue_collapse(cohortDefinitionIds, sep = ',')
+          }
+        )
+      ),
+      ranked_cohorts AS (
+          SELECT *,
+            ROW_NUMBER() OVER (
+              PARTITION BY subject_id ORDER BY cohort_start_date ASC
+            ) AS rn
+          FROM { cohortDatabaseSchema }.{ cohortTable }
+      )
+      SELECT 1 AS cohort_definition_id,
+        subject_id, cohort_start_date, cohort_end_date
+      FROM ranked_cohorts
+      WHERE rn = 1
+      ;
+      "
+    )
+  )
+
+  DatabaseConnector::insertTable(
+    connection = connection,
+    databaseSchema = cohortDatabaseSchema,
+    tableName = "combined_cohort_table",
+    data = result,
+    ...
+  )
+}

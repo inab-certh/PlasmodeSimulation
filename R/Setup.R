@@ -256,3 +256,89 @@ limitCdmToSample <- function(fromAndromeda, toAndromeda) {
 
   message("Data limited to sample")
 }
+
+
+generateObservationPeriods <- function(
+  connectionDetails,
+  cdmDatabaseSchema,
+  cohortDatabaseSchema,
+  cohortTable,
+  cohortDefinitionIds,
+  resultDatabaseSchema,
+  resultTableName,
+  anchor = "observation start",
+  days = 0
+) {
+
+  dropTableIfExists(
+    connectionDetails = connectionDetails,
+    resultDatabaseSchema = resultDatabaseSchema,
+    tableName = resultTableName
+  )
+
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection))
+
+  anchor <- tolower(anchor)
+  if (!anchor %in% c("observation start", "observation end")) {
+    stop("anchor must be either 'observation start' or 'observation end'")
+  }
+
+  if (missing(cohortDefinitionIds) || length(cohortDefinitionIds) == 0) {
+    stop("You must provide one or more cohortDefinitionIds.")
+  }
+
+  cohortIdList <- glue::glue_collapse(cohortDefinitionIds, sep = ", ")
+
+  resultTableFull <- glue::glue("{ resultDatabaseSchema }.{ resultTableName }")
+
+  sql <- if (anchor == "observation start") {
+    glue::glue(
+      "
+      CREATE TABLE { resultTableFull } AS
+      SELECT
+        op.person_id,
+        op.observation_period_start_date AS observation_period_start_date,
+        CASE
+          WHEN DATEADD(DAY, { days }, op.observation_period_start_date) < op.observation_period_end_date
+            THEN DATEADD(DAY, { days }, op.observation_period_start_date)
+            ELSE op.observation_period_end_date
+        END AS observation_period_end_date
+      FROM { cdmDatabaseSchema }.observation_period op
+      JOIN { cohortDatabaseSchema }.{ cohortTable } c
+        ON op.person_id = c.subject_id
+      WHERE c.cohort_definition_id IN ({ cohortIdList })
+      GROUP BY op.person_id, op.observation_period_start_date, op.observation_period_end_date
+      "
+    )
+  } else {
+    glue::glue(
+      "
+      CREATE TABLE { resultTableFull } AS
+      SELECT
+        op.person_id,
+        CASE
+          WHEN DATEADD(DAY, -{ days }, op.observation_period_end_date) > op.observation_period_start_date
+            THEN DATEADD(DAY, -{ days }, op.observation_period_end_date)
+            ELSE op.observation_period_start_date
+        END AS observation_period_start_date,
+        op.observation_period_end_date AS observation_period_end_date
+      FROM { cdmDatabaseSchema }.observation_period op
+      JOIN { cohortDatabaseSchema }.{ cohortTable } c
+        ON op.person_id = c.subject_id
+      WHERE c.cohort_definition_id IN ({ cohortIdList })
+      GROUP BY op.person_id, op.observation_period_start_date, op.observation_period_end_date
+      "
+    )
+  }
+
+  sql <- SqlRender::translate(sql, targetDialect = connection@dbms)
+
+  tryCatch({
+    DatabaseConnector::executeSql(connection, sql)
+    TRUE
+  }, error = function(e) {
+    message("Failed to execute SQL: ", e$message)
+    FALSE
+  })
+}

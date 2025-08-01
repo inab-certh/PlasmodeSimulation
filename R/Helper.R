@@ -172,3 +172,93 @@ writeLimitQueryForTable <- function(
   }
 
 }
+
+
+limitCohortTable <- function(
+  connection,
+  connectionDetails,
+  cohortDatabaseSchema,
+  cohortTable,
+  limitDatabaseSchema,
+  limitTable,
+  cohortTableStartDateField,
+  cohortTableEndDateField,
+  cohortTableRowIdField,
+  limitTableStartDateField,
+  limitTableEndDateField,
+  limitTableRowIdField
+) {
+
+  if (!missing(connectionDetails)) {
+    connection <- DatabaseConnector::connect(connectionDetails)
+    on.exit(DatabaseConnector::disconnect(connection))
+  }
+
+  limitedTable <- paste0(cohortTable, "_limited")
+  limitedTableFull <- glue::glue("{ cohortDatabaseSchema }.{ limitedTable }")
+
+  dropTableIfExists(
+    connectionDetails = connectionDetails,
+    resultDatabaseSchema = cohortDatabaseSchema,
+    tableName = limitedTable
+  )
+
+  fields <- DatabaseConnector::querySql(
+    connection = connection,
+    sql = glue::glue(
+      "
+      SELECT *
+      FROM { cohortDatabaseSchema }.{ cohortTable }
+      LIMIT 5
+      ;
+      "
+    )
+  ) |>
+    dplyr::rename_with(tolower) |>
+    names()
+  
+  retainedCols <- fields[
+    !fields %in% c(cohortTableStartDateField, cohortTableEndDateField)
+  ]
+  retainedColsSql <- paste(paste0("c.", retainedCols), collapse = ", ")
+
+  sql <- glue::glue(
+    "
+    CREATE TABLE { limitedTableFull } AS
+    SELECT
+      { retainedColsSql },
+      CASE
+        WHEN c.{cohortTableStartDateField} < l.{limitTableStartDateField}
+          THEN l.{limitTableStartDateField}
+          ELSE c.{cohortTableStartDateField}
+      END AS cohort_start_date,
+      CASE
+        WHEN c.{cohortTableEndDateField} > l.{limitTableEndDateField}
+          THEN l.{limitTableEndDateField}
+          ELSE c.{cohortTableEndDateField}
+      END AS cohort_end_date
+    FROM {cohortDatabaseSchema}.{cohortTable} c
+    JOIN {limitDatabaseSchema}.{limitTable} l
+      ON c.{ cohortTableRowIdField } = l.{ limitTableRowIdField }
+    WHERE NOT (
+        c.{cohortTableEndDateField} < l.{limitTableStartDateField} OR
+        c.{cohortTableStartDateField} > l.{limitTableEndDateField}
+    )
+    "
+  ) |>
+    SqlRender::translate(targetDialect = connection@dbms)
+
+
+  tryCatch({
+    DatabaseConnector::executeSql(connection, sql)
+    message(
+      "Cohort table successfully limited and stored as: ", limitedTableFull
+    )
+    TRUE
+  }, error = function(e) {
+    message(
+      "Failed to execute SQL: ", e$message
+    )
+    FALSE
+  })
+}
