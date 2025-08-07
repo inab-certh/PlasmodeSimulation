@@ -258,22 +258,34 @@ createCohortTableIndex <- function(
 
 }
 
-generatePriorOutcomes <- function(
+extractCohortPriorOutcomes <- function(
+  connection,
+  connectionDetails,
   cdmDatabaseSchema,
   outcomeDatabaseSchema,
   outcomeTable,
   cohortDatabaseSchema,
   cohortTable,
+  analysisId = 420,
   startDays = c(-30, -180, -365, -99999),
   startDayLabels = c("short", "medium", "long", "any"),
+  cohortIds,
   ...
 ) {
-  
+
+  if (missing(connection)) {
+    if (missing(connectionDetails)) {
+      stop("Either connection or connectionDetails must be provided.")
+    } else {
+      connection <- DatabaseConnector::connect(connectionDetails)
+      on.exit(DatabaseConnector::disconnect(connection))
+    }
+  }
+
   if (length(startDays) != length(startDayLabels)) {
     stop("startDays must have same length as startDayLabels.")
   }
 
-  analysisId <- 420
   covariateDataList <- list()
 
   for (i in seq_along(startDayLabels)) {
@@ -284,8 +296,8 @@ generatePriorOutcomes <- function(
       covariateCohortDatabaseSchema = outcomeDatabaseSchema,
       covariateCohortTable = outcomeTable,
       covariateCohorts = data.frame(
-        cohortId = outcomeIds,
-        cohortName = paste0("outcome_", outcomeIds)
+        cohortId = cohortIds,
+        cohortName = paste0("cohort_", cohortIds)
       ),
       startDay = startDays[i],
       endDay = 0
@@ -389,4 +401,47 @@ combineExposureCohorts <- function(
     data = result,
     ...
   )
+}
+
+extractCohortEvents <- function(
+  connection,
+  connectionDetails,
+  cdmDatabaseSchema,
+  cohortDatabaseSchema,
+  covariateCohortTable,
+  cohortTable,
+  analysisId = 521,
+  cohortIds,
+  startDay,
+  endDay
+) {
+
+  if (missing(connection)) {
+    if (missing(connectionDetails)) {
+      stop("Either connection or connectionDetails must be provided.")
+    } else {
+      connection <- DatabaseConnector::connect(connectionDetails)
+      on.exit(DatabaseConnector::disconnect(connection))
+    }
+  }
+
+  covariateSettings <- FeatureExtraction::createCohortBasedCovariateSettings(
+    analysisId = analysisId,
+    covariateCohortDatabaseSchema = cohortDatabaseSchema,
+    covariateCohortTable = covariateCohortTable,
+    covariateCohorts = data.frame(
+      cohortId = cohortIds,
+      cohortName = paste0("cohort_", cohortIds)
+    ),
+    startDay = startDay,
+    endDay = endDay
+  )
+
+  FeatureExtraction::getDbCohortBasedCovariatesData(
+    connection = connection,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortTable = cohortTable,
+    covariateSettings = covariateSettings
+  )
+
 }

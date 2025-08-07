@@ -381,3 +381,149 @@ modifyExistingModel <- function(
 
   message("Updated overview")
 }
+
+trainEventModel <- function(
+  eventId,
+  connection,
+  connectionDetails,
+  cdmDatabaseSchema,
+  cohortDatabaseSchema,
+  cohortTable,
+  covariateCohortTable,
+  cohortOutcomeData,
+  eventData,
+  startDay,
+  endDay,
+  covariateSettings,
+  priorEventData,
+  .s = "lambda.1se",
+  ...
+) {
+
+  if (missing(connection)) {
+    if (missing(connectionDetails)) {
+      stop("Either connection or connectionDetails must be provided.")
+    } else {
+      connection <- DatabaseConnector::connect(connectionDetails)
+      on.exit(DatabaseConnector::disconnect(connection))
+    }
+  }
+
+  eventAnalysisId <- eventData$covariateRef |>
+    dplyr::collect() |>
+    dplyr::filter(
+      stringr::str_detect(
+        covariateName,
+        glue::glue("cohort_{ eventId }")
+      )
+    ) |>
+    dplyr::pull(covariateId)
+
+  # !!Check length covariateId returned (should be 1)!!
+
+  population <- DatabaseConnector::querySql(
+    connection = connection,
+    sql = glue::glue(
+      "
+      SELECT * FROM  { cohortDatabaseSchema }.{ cohortTable };
+      "
+    )
+  ) |>
+    dplyr::as_tibble() |>
+    dplyr::rename_with(convertToCamelCase)
+
+  outcomePatients <- eventData$covariates |>
+    dplyr::collect() |>
+    dplyr::filter(covariateId == eventAnalysisId)
+
+  y <- population |>
+    dplyr::left_join(outcomePatients, by = c("subjectId" = "rowId")) |>
+    dplyr::mutate(
+      covariateValue = tidyr::replace_na(covariateValue, 0)
+    ) |>
+    dplyr::select(subjectId, covariateValue) |>
+    dplyr::arrange(subjectId)
+
+  # ------------------------------------------------------------------
+  # Build feature table X
+  # ------------------------------------------------------------------
+
+  covariateData <- FeatureExtraction::getDbCovariateData(
+    connectionDetails = connectionDetails,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    cohortTable = cohortTable,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    cohortIds = 1,
+    rowIdField = "subject_id",
+    covariateSettings = covariateSettings
+  )
+
+  x <- covariateData$covariates |>
+    dplyr::collect()
+
+  if (!missing(priorEventData)) {
+    x <- x |>
+      dplyr::bind_rows(
+        priorEventData$covariates |>
+          dplyr::filter(covariateId == eventAnalysisId) |>
+          dplyr::collect()
+      )
+  }
+
+  x$rowId <- as.factor(x$rowId)
+  x$covariateId <- as.factor(x$covariateId)
+
+  x <- x |> 
+    dplyr::arrange(rowId)
+
+  xSparse <- Matrix::sparseMatrix(
+    i = as.integer(x$rowId),
+    j = as.integer(x$covariateId),
+    x = x$covariateValue,
+    dimnames = list(levels(x$rowId), levels(x$covariateId))
+  )
+
+  y <- y |>
+    dplyr::mutate(
+      subjectId = as.character(subjectId)
+    )
+
+  yVec <- setNames(y$covariateValue, y$subjectId)
+  yAligned <- yVec[rownames(xSparse)]
+
+  fit <- glmnet::cv.glmnet(
+    x = xSparse,
+    y = yAligned,
+    ...
+  )
+
+  betas <- as.data.frame(as.matrix(coef(fit, s = .s))) |>
+    tibble::rownames_to_column(var = "covariateId")
+  names(betas)[2] <- "value"
+  betas <- betas |>
+    dplyr::filter(value != 0)
+
+  model <- Andromeda::andromeda()
+
+  model$y <- y |>
+    dplyr::rename("rowId" = "subjectId")
+  model$X <- xSparse |>
+    Matrix::summary() |>
+    dplyr::mutate(
+      rowId = rownames(xSparse)[i],
+      covariateId = colnames(xSparse)[j]
+    ) |>
+    dplyr::select(rowId, covariateId, x) |>
+    dplyr::rename(value = x) |>
+    dplyr::as_tibble() |>
+    dplyr::arrange(rowId, covariateId)
+  model$betas <- betas
+  model$covariateRef <- covariateData$covariateRef |>
+    dplyr::collect()
+
+  list(
+    model = model,
+    fit = fit
+  )
+
+}

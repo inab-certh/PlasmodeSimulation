@@ -186,7 +186,8 @@ limitCohortTable <- function(
   cohortTableRowIdField,
   limitTableStartDateField,
   limitTableEndDateField,
-  limitTableRowIdField
+  limitTableRowIdField,
+  replaceTable = FALSE
 ) {
 
   if (!missing(connectionDetails)) {
@@ -196,6 +197,7 @@ limitCohortTable <- function(
 
   limitedTable <- paste0(cohortTable, "_limited")
   limitedTableFull <- glue::glue("{ cohortDatabaseSchema }.{ limitedTable }")
+  cohortTableFull <- glue::glue("{ cohortDatabaseSchema }.{ cohortTable }")
 
   dropTableIfExists(
     connectionDetails = connectionDetails,
@@ -216,7 +218,7 @@ limitCohortTable <- function(
   ) |>
     dplyr::rename_with(tolower) |>
     names()
-  
+
   retainedCols <- fields[
     !fields %in% c(cohortTableStartDateField, cohortTableEndDateField)
   ]
@@ -231,12 +233,12 @@ limitCohortTable <- function(
         WHEN c.{cohortTableStartDateField} < l.{limitTableStartDateField}
           THEN l.{limitTableStartDateField}
           ELSE c.{cohortTableStartDateField}
-      END AS cohort_start_date,
+      END AS { cohortTableStartDateField },
       CASE
         WHEN c.{cohortTableEndDateField} > l.{limitTableEndDateField}
           THEN l.{limitTableEndDateField}
           ELSE c.{cohortTableEndDateField}
-      END AS cohort_end_date
+      END AS { cohortTableEndDateField }
     FROM {cohortDatabaseSchema}.{cohortTable} c
     JOIN {limitDatabaseSchema}.{limitTable} l
       ON c.{ cohortTableRowIdField } = l.{ limitTableRowIdField }
@@ -248,17 +250,37 @@ limitCohortTable <- function(
   ) |>
     SqlRender::translate(targetDialect = connection@dbms)
 
-
-  tryCatch({
+  success <- tryCatch({
     DatabaseConnector::executeSql(connection, sql)
-    message(
-      "Cohort table successfully limited and stored as: ", limitedTableFull
-    )
+    message("Cohort table successfully limited and stored as: ", limitedTableFull)
     TRUE
   }, error = function(e) {
-    message(
-      "Failed to execute SQL: ", e$message
-    )
+    message("Failed to execute SQL: ", e$message)
     FALSE
   })
+
+  # Replace original table if requested
+  if (success && replaceTable) {
+    tryCatch({
+      dropTableIfExists(
+        connectionDetails = connectionDetails,
+        resultDatabaseSchema = cohortDatabaseSchema,
+        tableName = cohortTable
+      )
+      DatabaseConnector::executeSql(
+        connection,
+        SqlRender::translate(
+          glue::glue(
+            "ALTER TABLE {limitedTableFull} RENAME TO {cohortTable};"
+          ),
+          targetDialect = connection@dbms
+        )
+      )
+      message("Original table replaced by limited table: ", cohortTableFull)
+    }, error = function(e) {
+      message("Failed to replace original table: ", e$message)
+    })
+  }
+
+  invisible(success)
 }

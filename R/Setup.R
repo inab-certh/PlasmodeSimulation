@@ -297,13 +297,13 @@ generateObservationPeriods <- function(
       "
       CREATE TABLE { resultTableFull } AS
       SELECT
-        op.person_id,
-        op.observation_period_start_date AS observation_period_start_date,
+        op.person_id AS subject_id,
+        op.observation_period_start_date AS cohort_start_date,
         CASE
           WHEN DATEADD(DAY, { days }, op.observation_period_start_date) < op.observation_period_end_date
             THEN DATEADD(DAY, { days }, op.observation_period_start_date)
             ELSE op.observation_period_end_date
-        END AS observation_period_end_date
+        END AS cohort_end_date
       FROM { cdmDatabaseSchema }.observation_period op
       JOIN { cohortDatabaseSchema }.{ cohortTable } c
         ON op.person_id = c.subject_id
@@ -316,13 +316,13 @@ generateObservationPeriods <- function(
       "
       CREATE TABLE { resultTableFull } AS
       SELECT
-        op.person_id,
+        op.person_id AS subject_id,
         CASE
           WHEN DATEADD(DAY, -{ days }, op.observation_period_end_date) > op.observation_period_start_date
             THEN DATEADD(DAY, -{ days }, op.observation_period_end_date)
             ELSE op.observation_period_start_date
-        END AS observation_period_start_date,
-        op.observation_period_end_date AS observation_period_end_date
+        END AS cohort_start_date,
+        op.observation_period_end_date AS cohort_end_date
       FROM { cdmDatabaseSchema }.observation_period op
       JOIN { cohortDatabaseSchema }.{ cohortTable } c
         ON op.person_id = c.subject_id
