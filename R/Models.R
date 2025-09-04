@@ -533,7 +533,7 @@ fitCvGlmnet <- function(
   startTime <- Sys.time()
   
   message(
-    glue::glue("Fitting model for event { eventId %/% 1000 }. This might take a while...")
+    glue::glue("Fitting model for event { eventId %/% 1000 }")
   )
 
   if (missing(seed)) {

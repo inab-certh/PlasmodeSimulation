@@ -525,31 +525,61 @@ limitCdmToCohortTable <- function(
 stepwiseObservationPeriod <- function(
   andromeda,
   periods = c(1),
-  incrementDays
+  incrementDays,
+  anchor = "observation_period_end_date"
 ) {
-  f <- function(andromeda, k, days) {
-    andromeda$observation_period |>
-      dplyr::collect() |>
-      dplyr::mutate(
-        cohort_definition_id = k,
-        subject_id = person_id,
-        cohort_start_date = lubridate::as_date(observation_period_end_date) -
-          lubridate::days(k * days),
-        cohort_end_date = observation_period_end_date
-      ) |>
-      dplyr::filter(cohort_start_date >= observation_period_start_date) |>
-      dplyr::select(
-        c(
-          "cohort_definition_id",
-          "subject_id",
-          "cohort_start_date",
-          "cohort_end_date"
-        )
-      )
+  # Validate anchor parameter
+  if (!anchor %in% c("observation_period_start_date", "observation_period_end_date")) {
+      stop(
+          "anchor must be either 'observation_period_start_date' or 'observation_period_end_date'"
+    )
   }
+  
+  f <- function(andromeda, k, days, anchor) {
+    if (anchor == "observation_period_end_date") {
+      andromeda$observation_period |>
+        dplyr::collect() |>
+        dplyr::mutate(
+          cohort_definition_id = k,
+          subject_id = person_id,
+          cohort_start_date = lubridate::as_date(observation_period_end_date) -
+            lubridate::days(k * days),
+          cohort_end_date = observation_period_end_date
+        ) |>
+        dplyr::filter(cohort_start_date >= observation_period_start_date) |>
+        dplyr::select(
+          c(
+            "cohort_definition_id",
+            "subject_id",
+            "cohort_start_date",
+            "cohort_end_date"
+          )
+        )
+    } else {
+      andromeda$observation_period |>
+        dplyr::collect() |>
+        dplyr::mutate(
+          cohort_definition_id = k,
+          subject_id = person_id,
+          cohort_start_date = lubridate::as_date(observation_period_start_date) +
+            lubridate::days(k * days),
+          cohort_end_date = observation_period_end_date
+        ) |>
+        dplyr::filter(cohort_start_date <= observation_period_end_date) |>
+        dplyr::select(
+          c(
+            "cohort_definition_id",
+            "subject_id",
+            "cohort_start_date",
+            "cohort_end_date"
+          )
+        )
+    }
+  }
+  
   result <- list()
   for (i in seq_along(periods)) {
-    result[[i]] <- f(andromeda, periods[i], incrementDays)
+    result[[i]] <- f(andromeda, periods[i], incrementDays, anchor)
   }
   andromeda$step_cohorts <- result |> dplyr::bind_rows()
   andromeda
