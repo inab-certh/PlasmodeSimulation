@@ -258,18 +258,19 @@ createCohortTableIndex <- function(
 
 }
 
-extractCohortPriorOutcomes <- function(
+extractCohortEvents <- function(
   connection,
   connectionDetails,
   cdmDatabaseSchema,
-  outcomeDatabaseSchema,
-  outcomeTable,
+  eventDatabaseSchema,
+  eventTable,
+  eventIds,
   cohortDatabaseSchema,
   cohortTable,
   analysisId = 420,
   startDays = c(-30, -180, -365, -99999),
+  endDay = 0,
   startDayLabels = c("short", "medium", "long", "any"),
-  cohortIds,
   ...
 ) {
 
@@ -293,21 +294,22 @@ extractCohortPriorOutcomes <- function(
 
     covariateSettings <- FeatureExtraction::createCohortBasedCovariateSettings(
       analysisId = analysisId,
-      covariateCohortDatabaseSchema = outcomeDatabaseSchema,
-      covariateCohortTable = outcomeTable,
+      covariateCohortDatabaseSchema = eventDatabaseSchema,
+      covariateCohortTable = eventTable,
       covariateCohorts = data.frame(
-        cohortId = cohortIds,
-        cohortName = paste0("cohort_", cohortIds)
+        cohortId = outcomeIds,
+        cohortName = paste0("cohort_", eventIds)
       ),
       startDay = startDays[i],
-      endDay = 0
+      endDay = endDay
     )
 
     covariateDataList[[i]] <- FeatureExtraction::getDbCohortBasedCovariatesData(
       connection = connection,
       cdmDatabaseSchema = cdmDatabaseSchema,
       cohortTable = glue::glue("{ cohortDatabaseSchema }.{ cohortTable }"),
-      covariateSettings = covariateSettings
+      covariateSettings = covariateSettings,
+      ...
     )
   }
 
@@ -319,7 +321,7 @@ extractCohortPriorOutcomes <- function(
     )
   })
 
-  transposed <- transpose(covariateDataListClean)
+  transposed <- data.table::transpose(covariateDataListClean)
 
   mergedData <- purrr::map(transposed, dplyr::bind_rows)
 
@@ -403,45 +405,3 @@ combineExposureCohorts <- function(
   )
 }
 
-extractCohortEvents <- function(
-  connection,
-  connectionDetails,
-  cdmDatabaseSchema,
-  cohortDatabaseSchema,
-  covariateCohortTable,
-  cohortTable,
-  analysisId = 521,
-  cohortIds,
-  startDay,
-  endDay
-) {
-
-  if (missing(connection)) {
-    if (missing(connectionDetails)) {
-      stop("Either connection or connectionDetails must be provided.")
-    } else {
-      connection <- DatabaseConnector::connect(connectionDetails)
-      on.exit(DatabaseConnector::disconnect(connection))
-    }
-  }
-
-  covariateSettings <- FeatureExtraction::createCohortBasedCovariateSettings(
-    analysisId = analysisId,
-    covariateCohortDatabaseSchema = cohortDatabaseSchema,
-    covariateCohortTable = covariateCohortTable,
-    covariateCohorts = data.frame(
-      cohortId = cohortIds,
-      cohortName = paste0("cohort_", cohortIds)
-    ),
-    startDay = startDay,
-    endDay = endDay
-  )
-
-  FeatureExtraction::getDbCohortBasedCovariatesData(
-    connection = connection,
-    cdmDatabaseSchema = cdmDatabaseSchema,
-    cohortTable = cohortTable,
-    covariateSettings = covariateSettings
-  )
-
-}

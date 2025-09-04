@@ -342,3 +342,257 @@ generateObservationPeriods <- function(
     FALSE
   })
 }
+
+convertToObservationPeriodTable <- function(
+  andromeda,
+  tableName,
+  rowIdField,
+  startDateField,
+  endDateField
+) {
+
+  andromeda[[tableName]] <- andromeda[[tableName]] |>
+    dplyr::collect() |>
+    dplyr::rename(
+      "person_id" = tidyr::all_of(rowIdField),
+      "observation_period_start_date" = tidyr::all_of(startDateField),
+      "observation_period_end_date" = tidyr::all_of(endDateField)
+    ) |>
+    dplyr::arrange(
+      .data$person_id,
+      .data$observation_period_start_date,
+      .data$observation_period_end_date
+    ) |>
+    dplyr::group_by(.data$person_id) |>
+    dplyr::mutate(observation_period_number = dplyr::row_number()) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+      observation_period_id = bit64::as.integer64(.data$person_id) * 1e4 +
+        .data$observation_period_number
+    )
+}
+
+combineExposureCohorts <- function(
+  andromeda,
+  cohortTable,
+  cohortDefinitionIds,
+  resultTable
+) {
+
+  if (cohortDefinitionIds == -1) {
+    cohortDefinitionIds <- andromeda[[cohortTable]] |>
+      dplyr::select(cohort_definition_id) |>
+      dplyr::collect() |>
+      dplyr::pull() |>
+      unique() |>
+      sort()
+  }
+
+  andromeda[[resultTable]] <- andromeda[[cohortTable]] |>
+    dplyr::filter(cohort_definition_id %in% cohortDefinitionIds) |>
+    dplyr::group_by(subject_id) |>
+    dplyr::slice_min(order_by = cohort_start_date, with_ties = FALSE) |>
+    dplyr::ungroup() |>
+    dplyr::collect() |>
+    dplyr::arrange(cohort_definition_id, subject_id)
+
+}
+
+limitCdmToCohortTable <- function(
+  connection,
+  connectionDetails,
+  cdmDatabaseSchema,
+  cohortDatabaseSchema,
+  cohortTableNames = "all",
+  transferTableNames = "all",
+  limitDatabaseSchema,
+  limitTable,
+  limitTableStartDateField,
+  limitTableEndDateField,
+  limitTableRowIdField,
+  andromeda,
+  includeLimitTable = FALSE,
+  includedLimitTableName,
+  ...
+) {
+
+  if (includeLimitTable) {
+    if (missing(includedLimitTableName)) {
+      stop("Need to define includedLimitTableName")
+    }
+
+    sql <- glue::glue(
+      "
+      SELECT *
+      FROM { limitDatabaseSchema }.{ limitTable }
+      ;
+      "
+    )
+
+    DatabaseConnector::querySqlToAndromeda(
+      connection = connection,
+      sql = sql,
+      andromeda = andromeda,
+      andromedaTableName = includedLimitTableName
+    )
+
+    message(
+      glue::glue(
+        "
+        Transferred limit table { limitDatabaseSchema }.{ limitTable }
+        to { includedLimitTableName }
+        "
+      )
+    )
+  }
+
+  message("Limiting tables to cohorts...")
+
+  if (cohortTableNames[1] == "all") {
+    tableNames <- c(
+      "person", "condition_occurrence", "condition_era", "death",
+      "device_exposure", "dose_era", "drug_era", "drug_exposure",
+      "episode", "measurement", "note", "observation",
+      "payer_plan_period", "procedure_occurrence",
+      "visit_detail", "visit_occurrence"
+    )
+  } else {
+    tableNames <- cohortTableNames
+  }
+
+  xx <- purrr::map(
+    .x = tableNames,
+    .f = limitCohortTable,
+    connection = connection,
+    andromeda = andromeda,
+    cohortDatabaseSchema = cohortDatabaseSchema,
+    limitDatabaseSchema = limitDatabaseSchema,
+    limitTableStartDateField = limitTableStartDateField,
+    limitTableEndDateField = limitTableEndDateField,
+    limitTableRowIdField = limitTableRowIdField,
+    limitTable = limitTable,
+    .progress = TRUE
+  )
+
+  if (transferTableNames[1] == "all") {
+    tableNames <- c(
+      "care_site", "cdm_source", "fact_relationship",
+      "location", "note_nlp", "provider", "vocabulary",
+      "concept", "concept_ancestor", "concept_class",
+      "concept_relationship", "concept_synonym"
+    )
+  } else {
+    tableNames <- transferTableNames
+  }
+
+
+  .extractTable <- function(
+    cdmDatabaseSchema,
+    tableName,
+    andromeda,
+    connection
+  ) {
+
+    message(glue::glue("Transferring table: { tableName }"))
+    sql <- glue::glue(
+      "
+      SELECT *
+      FROM { cdmDatabaseSchema }.{ tableName }
+      ;
+      "
+    ) |>
+      SqlRender::translate(targetDialect = connection@dbms)
+
+    DatabaseConnector::querySqlToAndromeda(
+      connection = connection,
+      andromeda = andromeda,
+      andromedaTableName = tableName,
+      sql = sql
+    )
+  }
+
+  purrr::walk(
+    .x = tableNames,
+    .f = .extractTable,
+    connection = connection,
+    andromeda = andromeda,
+    cdmDatabaseSchema = cdmDatabaseSchema,
+    .progress = TRUE
+  )
+
+}
+
+stepwiseObservationPeriod <- function(
+  andromeda,
+  periods = c(1),
+  incrementDays
+) {
+  f <- function(andromeda, k, days) {
+    andromeda$observation_period |>
+      dplyr::collect() |>
+      dplyr::mutate(
+        cohort_definition_id = k,
+        subject_id = person_id,
+        cohort_start_date = lubridate::as_date(observation_period_end_date) -
+          lubridate::days(k * days),
+        cohort_end_date = observation_period_end_date
+      ) |>
+      dplyr::filter(cohort_start_date >= observation_period_start_date) |>
+      dplyr::select(
+        c(
+          "cohort_definition_id",
+          "subject_id",
+          "cohort_start_date",
+          "cohort_end_date"
+        )
+      )
+  }
+  result <- list()
+  for (i in seq_along(periods)) {
+    result[[i]] <- f(andromeda, periods[i], incrementDays)
+  }
+  andromeda$step_cohorts <- result |> dplyr::bind_rows()
+  andromeda
+}
+
+extractPopulation <- function(
+  connection,
+  cohortDatabaseSchema,
+  cohortTable,
+  cohortIds
+) {
+
+  DatabaseConnector::querySql(
+    connection = connection,
+    sql = glue::glue(
+     "
+     SELECT *
+     FROM  { cohortDatabaseSchema }.{ cohortTable }
+     WHERE cohort_definition_id IN ({ glue::glue_collapse(cohortIds, sep = ',')})
+     ;
+     "
+    )
+  ) |>
+    dplyr::as_tibble() |>
+    dplyr::rename_with(convertToCamelCase)
+
+
+} 
+
+createNextPeriodSettings <- function(
+  settings,
+  periodLength
+) {
+
+  nextPeriodSettings <- settings
+
+  if (!is.null(settings$analysisId)) {
+    nextPeriodSettings$analysisId <- settings$analysisId + 1
+  }
+
+  nextPeriodSettings$temporalStartDays <- 0
+  nextPeriodSettings$temporalEndDays <- periodLength - 1
+
+  nextPeriodSettings
+
+}

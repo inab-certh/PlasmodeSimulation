@@ -383,130 +383,122 @@ modifyExistingModel <- function(
 }
 
 trainEventModel <- function(
-  eventId,
-  connection,
-  connectionDetails,
-  cdmDatabaseSchema,
+  population,
   cohortDatabaseSchema,
   cohortTable,
-  covariateCohortTable,
-  cohortOutcomeData,
+  cohortIds = -1,
+  eventId,
   eventData,
-  startDay,
-  endDay,
-  covariateSettings,
-  priorEventData,
+  covariateData,
   .s = "lambda.1se",
-  ...
+  modelSettings
 ) {
 
-  if (missing(connection)) {
-    if (missing(connectionDetails)) {
-      stop("Either connection or connectionDetails must be provided.")
-    } else {
-      connection <- DatabaseConnector::connect(connectionDetails)
-      on.exit(DatabaseConnector::disconnect(connection))
-    }
-  }
-
-  eventAnalysisId <- eventData$covariateRef |>
+  # Get event patients and build outcome
+  eventPatients <- eventData$covariates |>
     dplyr::collect() |>
-    dplyr::filter(
-      stringr::str_detect(
-        covariateName,
-        glue::glue("cohort_{ eventId }")
-      )
-    ) |>
-    dplyr::pull(covariateId)
+    dplyr::filter(covariateId == eventId)
 
-  # !!Check length covariateId returned (should be 1)!!
-
-  population <- DatabaseConnector::querySql(
-    connection = connection,
-    sql = glue::glue(
-      "
-      SELECT * FROM  { cohortDatabaseSchema }.{ cohortTable };
-      "
-    )
-  ) |>
-    dplyr::as_tibble() |>
-    dplyr::rename_with(convertToCamelCase)
-
-  outcomePatients <- eventData$covariates |>
+  patientsWithCovariates <- covariateData$covariates |>
     dplyr::collect() |>
-    dplyr::filter(covariateId == eventAnalysisId)
+    dplyr::pull(rowId) |>
+    unique() |>
+    sort()
 
   y <- population |>
-    dplyr::left_join(outcomePatients, by = c("subjectId" = "rowId")) |>
+    dplyr::filter(subjectId %in% patientsWithCovariates) |>
+    dplyr::left_join(eventPatients, by = c("subjectId" = "rowId")) |>
     dplyr::mutate(
       covariateValue = tidyr::replace_na(covariateValue, 0)
     ) |>
     dplyr::select(subjectId, covariateValue) |>
     dplyr::arrange(subjectId)
 
+  # Validate outcome variation
+  n_positive <- sum(y$covariateValue > 0)
+  n_total <- nrow(y)
+
+  if (n_positive == 0) {
+    stop(
+      glue::glue(
+        "Cannot train model for eventId {eventId}:",
+        "No positive outcomes found ({n_positive}/{n_total}).",
+        "Model training requires at least some positive cases."
+      )
+    )
+  }
+ 
+  if (n_positive == n_total) {
+    stop(
+      glue::glue(
+        "Cannot train model for eventId {eventId}:",
+        "All outcomes are positive ({n_positive}/{n_total}).",
+        "Model training requires outcome variation."
+      )
+    )
+  }
+ 
+  # Optionally warn if very few positive cases
+  if (n_positive < 10) {  # or some other threshold
+    warning(
+      glue::glue(
+        "Very few positive outcomes for eventId {eventId}:",
+        " {n_positive}/{n_total}.",
+        "Model may be unstable."
+      )
+    )
+  }
+
   # ------------------------------------------------------------------
   # Build feature table X
   # ------------------------------------------------------------------
-
-  covariateData <- FeatureExtraction::getDbCovariateData(
-    connectionDetails = connectionDetails,
-    cdmDatabaseSchema = cdmDatabaseSchema,
-    cohortTable = cohortTable,
-    cohortDatabaseSchema = cohortDatabaseSchema,
-    cohortIds = 1,
-    rowIdField = "subject_id",
-    covariateSettings = covariateSettings
-  )
-
   x <- covariateData$covariates |>
     dplyr::collect()
 
-  if (!missing(priorEventData)) {
+
+  if ("timeId" %in% colnames(covariateData$covariates)) {
     x <- x |>
-      dplyr::bind_rows(
-        priorEventData$covariates |>
-          dplyr::filter(covariateId == eventAnalysisId) |>
-          dplyr::collect()
+      dplyr::mutate(
+        covariateId = as.numeric(paste0(covariateId, sprintf("%04d", timeId)))
       )
   }
 
   x$rowId <- as.factor(x$rowId)
   x$covariateId <- as.factor(x$covariateId)
 
-  x <- x |> 
-    dplyr::arrange(rowId)
-
   xSparse <- Matrix::sparseMatrix(
     i = as.integer(x$rowId),
     j = as.integer(x$covariateId),
     x = x$covariateValue,
-    dimnames = list(levels(x$rowId), levels(x$covariateId))
+    dimnames = list(
+      levels(x$rowId),
+      levels(x$covariateId)
+    )
   )
 
   y <- y |>
     dplyr::mutate(
       subjectId = as.character(subjectId)
     )
-
   yVec <- setNames(y$covariateValue, y$subjectId)
   yAligned <- yVec[rownames(xSparse)]
 
-  fit <- glmnet::cv.glmnet(
-    x = xSparse,
-    y = yAligned,
-    ...
+  fit <- do.call(
+    glmnet::cv.glmnet,
+    c(list(x = xSparse, y = yAligned), modelSettings)
   )
-
+ 
   betas <- as.data.frame(as.matrix(coef(fit, s = .s))) |>
     tibble::rownames_to_column(var = "covariateId")
   names(betas)[2] <- "value"
   betas <- betas |>
     dplyr::filter(value != 0)
-
   model <- Andromeda::andromeda()
-
   model$y <- y |>
     dplyr::rename("rowId" = "subjectId")
+  model$eventRef <- eventData$covariateRef |>
+    dplyr::filter(covariateId == eventId) |>
+    dplyr::collect()
   model$X <- xSparse |>
     Matrix::summary() |>
     dplyr::mutate(
@@ -520,10 +512,203 @@ trainEventModel <- function(
   model$betas <- betas
   model$covariateRef <- covariateData$covariateRef |>
     dplyr::collect()
-
   list(
     model = model,
     fit = fit
   )
+}
 
+fitCvGlmnet <- function(
+  eventId,
+  event = c("covariate", "exposure", "outcome"),
+  featureMatrix,
+  sample = FALSE,
+  sampleSize = 2e4,
+  maxTimeId,
+  modelSettings,
+  .s = "lambda.min",
+  seed
+) {
+
+  startTime <- Sys.time()
+  
+  message(
+    glue::glue("Fitting model for event { eventId %/% 1000 }. This might take a while...")
+  )
+
+  if (missing(seed)) {
+    seed <- as.integer(Sys.time())
+  }
+
+  modelMatrices <- createModelMatrices(
+    featureMatrix = featureMatrix,
+    sample = sample,
+    sampleSize = sampleSize,
+    seed = seed,
+    event = event,
+    eventId = eventId,
+    maxTimeId = maxTimeId
+  )
+
+  message("Training model...")
+  fit <- do.call(
+    glmnet::cv.glmnet,
+    c(
+      list(
+        x = modelMatrices$x,
+        y = modelMatrices$y
+      ),
+      modelSettings
+    )
+  )
+
+
+  betas <- as.data.frame(as.matrix(coef(fit, s = .s))) |>
+    tibble::rownames_to_column(var = "covariateId")
+  names(betas)[2] <- "value"
+  betas <- betas |>
+    dplyr::filter(value != 0) |>
+    dplyr::mutate(
+      covariateId = dplyr::case_when(
+        covariateId == "(Intercept)" ~ "-1",
+        covariateId == "timeId" ~ "0",
+        TRUE ~ covariateId
+      ),
+      covariateId = as.numeric(covariateId),
+      eventId = eventId
+    ) |>
+    dplyr::relocate("eventId")
+
+  model <- Andromeda::andromeda()
+  model$betas <- betas
+  model$reference <- data.frame(
+    event = event,
+    eventId = eventId,
+    sampled = TRUE,
+    seed = seed
+  )
+
+  message("Cleaning up...")
+
+  rm(fit)
+  gc()
+
+  runDuration <- difftime(Sys.time(), startTime, units = "auto")
+
+  message(
+    glue::glue(
+      "Model trained in { round(runDuration, 2) } { units(runDuration) }"
+    )
+  )
+  model
+}
+
+createModelMatrices <- function(
+  featureMatrix,
+  sample = TRUE,
+  sampleSize = 2e4,
+  seed,
+  event = c("covariate", "outcome", "exposure"),
+  eventId,
+  maxTimeId
+) {
+
+  if (missing(seed)) {
+    seed <- as.integer(Sys.time())
+  }
+
+  if (sample) {
+    message("Downsampling...")
+    sampledRowIds <- featureMatrix$rowMapping |>
+      dplyr::pull(rowId) |>
+      unique()
+
+    sampledRowIds <- withr::with_seed(
+      seed = seed,
+      code = sample(x = sampledRowIds, size = sampleSize, replace = FALSE)
+    ) |>
+      sort()
+  } else {
+    sampledRowIds <- featureMatrix$rowMapping |>
+      dplyr::distinct(rowId) |>
+      dplyr::pull(rowId)
+  }
+
+  if (event == "covariate") {
+    selectedCols <- featureMatrix$colMapping |>
+      dplyr::filter(lag != 0)
+  } else if (event == "exposure") {
+    exposureCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "exposures",
+        lag != 0
+      )
+
+    covariateCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "covariates"
+      )
+
+    outcomeCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "outcomes",
+        lag != 0
+      )
+
+    selectedCols <- covariateCols |>
+      dplyr::bind_rows(exposureCols, outcomeCols)
+
+  } else if (event == "outcome") {
+
+    exposureCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "exposures"
+      )
+
+    covariateCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "covariates"
+      )
+
+    outcomeCols <- featureMatrix$colMapping |>
+      dplyr::filter(
+        source == "outcomes",
+        lag != 0
+      )
+
+    selectedCols <- covariateCols |>
+      dplyr::bind_rows(exposureCols, outcomeCols)
+
+  }
+
+  xMatrix <- featureMatrix$sparseMatrix[
+    featureMatrix$rowMapping |>
+      dplyr::filter(
+        timeId < maxTimeId,
+        rowId %in% sampledRowIds
+      ) |>
+      dplyr::pull(matrixRow),
+    selectedCols |>
+      dplyr::pull(matrixCol)
+  ]
+
+  yMatrix <- featureMatrix$sparseMatrix[
+    featureMatrix$rowMapping |>
+      dplyr::filter(
+        timeId < maxTimeId,
+        rowId %in% sampledRowIds
+      ) |>
+      dplyr::pull(matrixRow),
+    featureMatrix$colMapping |>
+      dplyr::filter(
+        lag == 0,
+        covariateId == eventId
+      ) |>
+      dplyr::pull(matrixCol)
+  ]
+
+  list(
+    x = xMatrix,
+    y = yMatrix
+  )
 }
