@@ -346,3 +346,182 @@ generateNewOutcomeTable <- function(
 
   result
 }
+
+instantiateSampledDatabase <- function(
+  fromAndromeda,
+  exposureTableName,
+  outcomeTableName,
+  exposureIds,
+  sampleSize,
+  periodLength
+) {
+
+  result <- Andromeda::andromeda()
+
+  exposureRowIdFields <- names(fromAndromeda[[exposureTableName]]) |>
+    intersect(c("row_id", "subject_id", "person_id")) |>
+    convertToCamelCase()
+
+  if (length(exposureRowIdFields) != 1) {
+    stop("Found more than one exposure row id field!")
+  }
+
+  outcomeRowIdFields <- names(fromAndromeda[[outcomeTableName]]) |>
+    intersect(c("row_id", "subject_id", "person_id")) |>
+    convertToCamelCase()
+
+  if (length(outcomeRowIdFields) != 1) {
+    stop("Found more than one outcome row id field!")
+  }
+
+  result$subject_id_map <- fromAndromeda[[exposureTableName]] |>
+    dplyr::rename_with(convertToCamelCase) |>
+    dplyr::filter(.data[["cohortDefinitionId"]] %in% exposureIds) |>
+    dplyr::distinct(.data[[exposureRowIdFields]]) |>
+    dplyr::collect() |>
+    dplyr::sample_n(size = sampleSize, replace = TRUE) |>
+    dplyr::rename("sourceSubjectId" = "subjectId") |>
+    dplyr::arrange(.data[["sourceSubjectId"]]) |>
+    dplyr::mutate(subjectId = seq_len(dplyr::n())) |>
+    dplyr::relocate("subjectId", .before = "sourceSubjectId") |>
+    dplyr::rename_with(convertToSnakeCase, capitalize = FALSE)
+
+  mapTableToSample(
+    fromAndromeda = fromAndromeda,
+    toAndromeda = result,
+    subjectIdMapTableName = "subject_id_map",
+    tableName = "observation_period"
+  )
+
+  tableNames <- c(
+    exposureTableName,
+    outcomeTableName
+  )
+
+  purrr::walk(
+    .x = tableNames,
+    .f = mapTableToSample,
+    fromAndromeda = fromAndromeda,
+    toAndromeda = result,
+    subjectIdMapTableName = "subject_id_map",
+    tableRowIdField = "subject_id",
+    .progress = TRUE
+  )
+
+  result <- stepwiseObservationPeriod(
+    andromeda = result,
+    periods = 1,
+    incrementDays = periodLength,
+    anchor = "observation_period_start_date"
+  )
+
+  tableNames <- c(
+    "condition_occurrence", "condition_era", "death",
+    "device_exposure", "dose_era", "drug_era", "drug_exposure",
+    "episode", "measurement", "note", "observation",
+    "payer_plan_period", "person", "procedure_occurrence",
+    "visit_detail", "visit_occurrence", "observation_period"
+  )
+
+  startDateColumns <- system.file(
+    "csv", "table_start_dates.csv",
+    package = "PlasmodeSimulation"
+  ) |>
+    readr::read_csv(show_col_types = FALSE)
+
+  purrr::walk(
+    .x = tableNames,
+    .f = mapTableToSample,
+    fromAndromeda = fromAndromeda,
+    toAndromeda = result,
+    subjectIdMapTableName = "subject_id_map",
+    startDateColumns = startDateColumns,
+    .progress = TRUE
+  )
+
+  tableNames <- c(
+    "care_site", "cdm_source", "fact_relationship",
+    "location", "note_nlp", "provider", "vocabulary",
+    "concept", "concept_ancestor", "concept_class",
+    "concept_relationship", "concept_synonym"
+  )
+
+  message("Transferring tables...")
+  purrr::walk(
+    .x = tableNames,
+    .f = \(from, to, x) to[[x]] <- from[[x]],
+    from = fromAndromeda,
+    to = result,
+    .progress = TRUE
+  )
+
+  result
+}
+
+
+mapTableToSample <- function(
+  fromAndromeda,
+  toAndromeda,
+  subjectIdMapTableName,
+  tableName,
+  tableRowIdField = "person_id",
+  startDateColumns = NULL
+) {
+
+  resultColNames <- names(fromAndromeda[[tableName]])
+
+  res <- toAndromeda[[subjectIdMapTableName]] |>
+    dplyr::collect() |>
+    dplyr::left_join(
+      fromAndromeda[[tableName]] |> dplyr::collect(),
+      by = c("source_subject_id" = tableRowIdField),
+      relationship = "many-to-many"
+    ) |>
+    dplyr::select(-dplyr::all_of("source_subject_id")) |>
+    dplyr::rename(!!tableRowIdField := "subject_id")
+
+  if (tableName %in% startDateColumns$table) {
+    dateCols <- startDateColumns |>
+      dplyr::filter(table == tableName)
+
+    res <- res |>
+      dplyr::left_join(
+        toAndromeda$step_cohorts |> dplyr::collect(),
+        by = c("person_id" = "subject_id")
+      ) |>
+      dplyr::filter(.data[[dateCols$start_date]] <= .data$cohort_start_date) |>
+      dplyr::mutate(
+        !!dateCols$end_date := dplyr::if_else(
+          .data[[dateCols$end_date]] > .data[["cohort_start_date"]],
+          .data[["cohort_start_date"]] - lubridate::days(1),
+          .data[[dateCols$end_date]]
+        )
+      )
+
+    startDateTime <- paste0(dateCols$start_date, "time")
+    endDateTime <- paste0(dateCols$end_date, "time")
+
+    if (startDateTime %in% names(res)) {
+      res <- res |>
+        dplyr::mutate(
+          !!startDateTime := lubridate::as_datetime(.data[[dateCols$start_date]])
+        )
+
+      if (startDateTime != endDateTime) {
+        res <- res |>
+          dplyr::mutate(
+            !!endDateTime := lubridate::as_datetime(.data[[dateCols$end_date]])
+          )
+      }
+    }
+
+  }
+
+  toAndromeda[[tableName]] <- res |>
+    dplyr::select(dplyr::all_of(resultColNames))
+
+  message(
+    glue::glue("Mapped table {tableName}")
+  )
+
+}
