@@ -561,3 +561,94 @@ extractConceptIds <- function(model) {
     dplyr::pull("conceptId") |>
     unique()
 }
+
+truncateCohortTable <- function(
+  andromeda,
+  tableName,
+  stepCohortTableName = "step_cohorts"
+  ) {
+
+  andromeda[[tableName]] <- andromeda[[tableName]] |>
+    dplyr::left_join(
+      andromeda[[stepCohortTableName]] |>
+        dplyr::select(
+          dplyr::all_of(
+            c(
+              "subject_id",
+              "cohort_start_date",
+              "cohort_end_date"
+            )
+          )
+        ) |>
+        dplyr::rename(
+          c(
+            "target_start_date" = "cohort_start_date",
+            "target_end_date" = "cohort_end_date",
+            )
+        ),
+      by = "subject_id"
+    ) |>
+    dplyr::filter(
+      .data[["cohort_start_date"]] < .data[["target_start_date"]]
+    ) |>
+    dplyr::mutate(
+      cohort_end_date = ifelse(
+        .data[["cohort_end_date"]] >= .data[["target_start_date"]],
+        .data[["target_start_date"]] - lubridate::days(1),
+        .data[["cohort_end_date"]]
+      )
+    ) |>
+    dplyr::select(
+      dplyr::all_of(
+        c(
+          "cohort_definition_id",
+          "subject_id",
+          "cohort_start_date",
+          "cohort_end_date"
+        )
+      )
+    ) |>
+    dplyr::arrange(
+      c(.data[["cohort_definition_id"]], .data[["subject_id"]])
+    )
+} 
+
+expandModelMatrix <- function(
+  andromeda,
+  expandFromTable = "person",
+  rowIdField = "person_id",
+  modelMatrix,
+  timeIds
+) {
+
+  missingRowIds <- andromeda[[expandFromTable]] |>
+    dplyr::distinct(.data[[rowIdField]]) |>
+    dplyr::pull() |>
+    setdiff(
+      modelMatrix$rowMapping |>
+        dplyr::distinct(rowId) |>
+        dplyr::pull()
+    ) |>
+    sort()
+
+  rowsToAppend <- expand.grid(rowId = missingRowIds, timeId = timeIds) |>
+    dplyr::mutate(
+      rowKey = paste(.data[["rowId"]], .data[["timeId"]], sep = "_"),
+      matrixRow = dplyr::row_number() + nrow(modelMatrix$sparseMatrix)
+    ) |>
+    dplyr::relocate(c("matrixRow", "rowKey"))
+
+  modelMatrix$rowMapping <- modelMatrix$rowMapping |>
+    dplyr::bind_rows(rowsToAppend) |>
+    dplyr::as_tibble()
+
+  zeroRows <- Matrix::sparseMatrix(
+    i = integer(0), j = integer(0),
+    dims = c(nrow(rowsToAppend), ncol(modelMatrix$sparseMatrix))
+  )
+
+  modelMatrix$sparseMatrix <- modelMatrix$sparseMatrix |>
+    rbind(zeroRows)
+
+  modelMatrix
+}

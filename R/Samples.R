@@ -393,6 +393,13 @@ instantiateSampledDatabase <- function(
     tableName = "observation_period"
   )
 
+  result <- stepwiseObservationPeriod(
+    andromeda = result,
+    periods = 1,
+    incrementDays = periodLength,
+    anchor = "observation_period_start_date"
+  )
+
   tableNames <- c(
     exposureTableName,
     outcomeTableName
@@ -408,11 +415,11 @@ instantiateSampledDatabase <- function(
     .progress = TRUE
   )
 
-  result <- stepwiseObservationPeriod(
+  purrr::walk(
+    .x = tableNames,
+    .f = truncateCohortTable,
     andromeda = result,
-    periods = 1,
-    incrementDays = periodLength,
-    anchor = "observation_period_start_date"
+    .progress = TRUE
   )
 
   tableNames <- c(
