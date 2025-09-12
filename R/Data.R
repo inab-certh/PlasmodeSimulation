@@ -168,7 +168,14 @@ buildSparseTemporal <- function(df, allTimeIds = NULL) {
   }
 
   bases <- sort(unique(df2$baseId))
-  colLevels <- as.character(c(rbind(bases * 1000L, bases * 1000L + 1L)))
+  lags <- df2$lag |> unique()
+  colLevelsList <- list()
+  for (i in 0:lags) {
+    colLevelsList[[i + 1]] <- as.character(bases * 1000 + i)
+  }
+
+  colLevels <- colLevelsList |> unlist()
+  
 
   # index maps
   rowMap <- stats::setNames(seq_along(rowLevels), rowLevels)
@@ -231,16 +238,18 @@ createLaggedCovariatesWithMapping <- function(
   result <- andromeda |>
     dplyr::mutate(covariateId = covariateId * lagIdMultiplier)
 
-  for (lag in 1:maxLag) {
-    # Create lag by self-joining with time shift
-    laggedData <- andromeda |>
-      dplyr::mutate(
-        timeId = timeId + 1,
-        covariateId = covariateId * lagIdMultiplier + lag
-      )
-    
-    # Add to result
-    result <- dplyr::union_all(result, laggedData)
+  if (maxLag > 0) {
+    for (lag in 1:maxLag) {
+      # Create lag by self-joining with time shift
+      laggedData <- andromeda |>
+        dplyr::mutate(
+          timeId = timeId + 1,
+          covariateId = covariateId * lagIdMultiplier + lag
+        )
+      
+      # Add to result
+      result <- dplyr::union_all(result, laggedData)
+    }
   }
   
   result |>

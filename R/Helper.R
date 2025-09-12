@@ -331,6 +331,7 @@ generateLagsMatrix <- function(
 ) {
 
   message("Generating sparse matrix...")
+  message(glue::glue("Using maxLag: { maxLag }"))
 
   createLaggedCovariatesWithMapping(
     andromeda = andromeda,
@@ -646,6 +647,9 @@ expandModelMatrix <- function(
     i = integer(0), j = integer(0),
     dims = c(nrow(rowsToAppend), ncol(modelMatrix$sparseMatrix))
   )
+
+  rownames(zeroRows) <- rowsToAppend |>
+    dplyr::pull(.data[["rowKey"]])
 
   modelMatrix$sparseMatrix <- modelMatrix$sparseMatrix |>
     rbind(zeroRows)
