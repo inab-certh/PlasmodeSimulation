@@ -1,14 +1,30 @@
 computeLinearPredictorMatrix <- function(
   featureData,
-  model,
+  models,
   eventId,
   timeId,
   maxLag = 0
 ) {
 
+  bbData <- models$betas |>
+    dplyr::filter(.data[["eventId"]] == !!eventId) |>
+    dplyr::collect()
+
+  bb <- models$betas |>
+    dplyr::filter(.data[["eventId"]] == !!eventId) |>
+    dplyr::pull(.data[["value"]]) |>
+    matrix()
+
   selectedCols <- featureData$colMapping |>
     dplyr::filter(lag <= maxLag) |>
     dplyr::mutate(covariateId = .data[["covariateId"]] + 1) |>
+    dplyr::mutate(
+      covariateId = dplyr::case_when(
+        feature == "timeId" ~ 0,
+        TRUE ~ covariateId
+      )
+    ) |> 
+    dplyr::inner_join(bbData, by = "covariateId") |> 
     dplyr::pull(.data[["matrixCol"]])
 
   selectedRows <- featureData$rowMapping |>
@@ -18,11 +34,6 @@ computeLinearPredictorMatrix <- function(
   xx <- 1 |>
     cbind(featureData$sparseMatrix[selectedRows, selectedCols])
 
-
-  bb <- models$betas |>
-    dplyr::filter(.data[["eventId"]] == !!eventId) |>
-    dplyr::pull(.data[["value"]]) |>
-    matrix()
 
   result <- xx %*% bb
   attr(result, "eventId") <- eventId

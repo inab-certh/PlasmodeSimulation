@@ -170,7 +170,7 @@ buildSparseTemporal <- function(df, allTimeIds = NULL) {
   bases <- sort(unique(df2$baseId))
   lags <- df2$lag |> unique()
   colLevelsList <- list()
-  for (i in 0:lags) {
+  for (i in lags) {
     colLevelsList[[i + 1]] <- as.character(bases * 1000 + i)
   }
 
